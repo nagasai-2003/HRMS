@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"hrms/backend/internal/boards"
 	"hrms/backend/internal/rules"
 	"hrms/backend/internal/store"
 )
@@ -37,6 +38,7 @@ func entryJSON(e store.ListEntriesRow) map[string]any {
 	return map[string]any{
 		"id": e.ID, "day": ymd(e.Day), "project_id": e.ProjectID, "project_code": e.ProjectCode,
 		"project_name": e.ProjectName, "task_ref": e.TaskRef, "minutes": e.Minutes, "note": e.Note,
+		"task_id": e.TaskID, "task_key": e.TaskKey, "task_title": e.TaskTitle,
 	}
 }
 
@@ -289,9 +291,13 @@ func (s *Server) saveTimesheetWeek(w http.ResponseWriter, r *http.Request) {
 		}
 		for i, e := range in.Entries {
 			d, _ := parseDay(e.Day)
+			ref, taskID, err := linkTask(ctx, q, u.ID, clean(e.TaskRef, 40))
+			if err != nil {
+				return err
+			}
 			if err := q.InsertEntry(ctx, store.InsertEntryParams{
-				TimesheetID: sheet.ID, Day: d, ProjectID: e.ProjectID,
-				TaskRef: clean(e.TaskRef, 40), Minutes: e.Minutes, Note: clean(e.Note, 300), Sort: int32(i),
+				TimesheetID: sheet.ID, Day: d, ProjectID: e.ProjectID, TaskRef: ref, TaskID: taskID,
+				Minutes: e.Minutes, Note: clean(e.Note, 300), Sort: int32(i),
 			}); err != nil {
 				return err
 			}
@@ -474,4 +480,21 @@ func (s *Server) decideTimesheet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.respondWeek(w, r, t, t.UserID.String())
+}
+
+// linkTask turns a task reference such as "fe-142" into a link when it names
+// a task in one of the person's teams. Anything else stays plain text.
+func linkTask(ctx context.Context, q *store.Queries, userID uuid.UUID, ref string) (string, *uuid.UUID, error) {
+	key, n, ok := boards.ParseRef(ref)
+	if !ok {
+		return ref, nil, nil
+	}
+	t, err := q.FindMemberTask(ctx, store.FindMemberTaskParams{UserID: userID, Key: key, Number: n})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ref, nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	return taskKey(t.Key, t.Number), &t.ID, nil
 }

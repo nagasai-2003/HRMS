@@ -23,6 +23,7 @@ const sections: { title: string; items: NavItem[] }[] = [
       { href: "/dashboard", label: "Dashboard", show: () => true },
       { href: "/attendance", label: "Attendance", show: () => true },
       { href: "/requests", label: "WFH and requests", show: () => true },
+      { href: "/tasks", label: "Tasks", show: () => true },
       { href: "/timesheets", label: "Timesheets", show: () => true },
     ],
   },

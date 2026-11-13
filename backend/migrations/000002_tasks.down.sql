@@ -1,0 +1,13 @@
+ALTER TABLE timesheet_entries DROP COLUMN IF EXISTS task_id;
+DROP TABLE IF EXISTS task_activity;
+DROP TABLE IF EXISTS task_comments;
+DROP TABLE IF EXISTS task_checklist;
+DROP TABLE IF EXISTS task_assignees;
+DROP TABLE IF EXISTS tasks;
+DROP TYPE IF EXISTS task_priority;
+DROP TABLE IF EXISTS task_statuses;
+DROP TYPE IF EXISTS status_category;
+ALTER TABLE teams DROP CONSTRAINT IF EXISTS teams_key_format;
+DROP INDEX IF EXISTS teams_key_unique;
+ALTER TABLE teams DROP COLUMN IF EXISTS task_seq;
+ALTER TABLE teams DROP COLUMN IF EXISTS key;

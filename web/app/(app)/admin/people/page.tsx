@@ -7,7 +7,7 @@ import { RoleGate, useMe } from "@/components/shell";
 import { Badge, Button, Card, cx, Empty, Field, inputCls, Notice, PageHeader, Table } from "@/components/ui";
 
 type Person = { id: string; email: string; name: string; title: string; role: string; work_policy: string; remote_weekdays: number[]; office_id: string | null; active: boolean };
-type Team = { id: string; name: string; members: { user_id: string; is_manager: boolean }[] };
+type Team = { id: string; name: string; key: string; members: { user_id: string; is_manager: boolean }[] };
 type Data = { people: Person[]; teams: Team[]; offices: { id: string; name: string }[] };
 
 const blank: Person & { password: string } = { id: "", email: "", name: "", title: "", role: "employee", work_policy: "office", remote_weekdays: [], office_id: null, active: true, password: "" };
@@ -27,6 +27,8 @@ function Inner() {
   const [teamId, setTeamId] = useState("");
   const [edit, setEdit] = useState<(Person & { password: string }) | null>(null);
   const [newTeam, setNewTeam] = useState("");
+  const [newKey, setNewKey] = useState("");
+  const [teamEdit, setTeamEdit] = useState<{ name: string; key: string } | null>(null);
   const [addUser, setAddUser] = useState("");
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
@@ -142,26 +144,39 @@ function Inner() {
           {data.teams.map((t) => {
             const mgrs = t.members.filter((m) => m.is_manager).map((m) => byId[m.user_id]?.name).filter(Boolean);
             return (
-              <button key={t.id} type="button" onClick={() => setTeamId(t.id)} aria-pressed={t.id === teamId}
+              <button key={t.id} type="button" onClick={() => { setTeamId(t.id); setTeamEdit(null); }} aria-pressed={t.id === teamId}
                 className={cx("flex flex-col gap-1 rounded-2xl border-2 bg-white px-4 py-3 text-left", t.id === teamId ? "border-brand" : "border-line")}>
-                <span className="flex justify-between gap-2"><span className="font-semibold">{t.name}</span><span className="text-xs text-muted">{t.members.length} people</span></span>
+                <span className="flex justify-between gap-2"><span className="font-semibold">{t.name} <span className="ml-1 rounded bg-canvas px-1.5 py-0.5 text-[11px] font-semibold text-ink-2">{t.key}</span></span><span className="text-xs text-muted">{t.members.length} people</span></span>
                 <span className="text-xs text-muted">Manager: {mgrs.join(", ") || "none"}</span>
               </button>
             );
           })}
-          <form className="flex gap-2" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api("/admin/teams", { body: { name: newTeam } }), `${newTeam} created.`)) setNewTeam(""); }}>
+          <form className="flex gap-2" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api("/admin/teams", { body: { name: newTeam, key: newKey } }), `${newTeam} created.`)) { setNewTeam(""); setNewKey(""); } }}>
             <input className={inputCls + " min-w-0 flex-1"} placeholder="New team name" aria-label="New team name" value={newTeam} onChange={(e) => setNewTeam(e.target.value)} />
+            <input className={inputCls + " w-20 uppercase"} placeholder="Key" aria-label="Task key for the new team, like FE" maxLength={6} value={newKey} onChange={(e) => setNewKey(e.target.value.toUpperCase())} />
             <Button type="submit" disabled={!newTeam.trim()}>Create</Button>
           </form>
-          <p className="text-xs leading-relaxed text-muted">A person can be in more than one team. Team tasks and channels stay private to the team.</p>
+          <p className="text-xs leading-relaxed text-muted">A person can be in more than one team. Team tasks and channels stay private to the team. The key starts every task number (FE-142); leave it empty to get one from the name.</p>
         </div>
 
         <Card
-          title={team ? `${team.name} team` : "Pick a team"}
-          aside={team && <button type="button" className="font-semibold text-bad" onClick={() => confirm(`Delete the ${team.name} team? People stay; only the team goes.`) && run(() => api(`/admin/teams/${team.id}`, { method: "DELETE" }), `${team.name} deleted.`).then(() => setTeamId(""))}>Delete team</button>}
+          title={team ? `${team.name} team · ${team.key}` : "Pick a team"}
+          aside={team && (
+            <span className="flex gap-4">
+              <button type="button" className="font-semibold text-brand" onClick={() => setTeamEdit(teamEdit ? null : { name: team.name, key: team.key })}>{teamEdit ? "Close" : "Rename"}</button>
+              <button type="button" className="font-semibold text-bad" onClick={() => confirm(`Delete the ${team.name} team? People stay, but its task board and every task on it go too.`) && run(() => api(`/admin/teams/${team.id}`, { method: "DELETE" }), `${team.name} deleted.`).then(() => setTeamId(""))}>Delete team</button>
+            </span>
+          )}
         >
           {team && (
             <>
+              {teamEdit && (
+                <form className="mb-4 flex flex-wrap items-end gap-2 rounded-xl bg-canvas p-3" onSubmit={async (e) => { e.preventDefault(); if (await run(() => api(`/admin/teams/${team.id}`, { method: "PATCH", body: teamEdit }), `${teamEdit.name} saved.`)) setTeamEdit(null); }}>
+                  <Field label="Team name"><input className={inputCls + " w-56"} value={teamEdit.name} onChange={(e) => setTeamEdit({ ...teamEdit, name: e.target.value })} /></Field>
+                  <Field label="Task key" hint="Changing it renames every task (FE-142 → WEB-142)."><input className={inputCls + " w-28 uppercase"} maxLength={6} value={teamEdit.key} onChange={(e) => setTeamEdit({ ...teamEdit, key: e.target.value.toUpperCase() })} /></Field>
+                  <Button type="submit" variant="primary">Save</Button>
+                </form>
+              )}
               {team.members.length === 0 ? <Empty>No one in this team yet.</Empty> : (
                 <Table head={["Person", "App access", "Team manager", ""]} minWidth={560}>
                   {team.members.map((m) => {

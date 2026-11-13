@@ -48,13 +48,24 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const createTeam = `-- name: CreateTeam :one
-INSERT INTO teams (name) VALUES ($1) RETURNING id, name, created_at
+INSERT INTO teams (name, key) VALUES ($1, $2) RETURNING id, name, created_at, key, task_seq
 `
 
-func (q *Queries) CreateTeam(ctx context.Context, name string) (Team, error) {
-	row := q.db.QueryRow(ctx, createTeam, name)
+type CreateTeamParams struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, error) {
+	row := q.db.QueryRow(ctx, createTeam, arg.Name, arg.Key)
 	var i Team
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.Key,
+		&i.TaskSeq,
+	)
 	return i, err
 }
 
@@ -295,7 +306,7 @@ func (q *Queries) ListTeamMembers(ctx context.Context, teamID uuid.UUID) ([]List
 }
 
 const listTeams = `-- name: ListTeams :many
-SELECT t.id, t.name,
+SELECT t.id, t.name, t.key,
     count(tm.user_id)::int AS members,
     coalesce(string_agg(u.name, ', ' ORDER BY u.name) FILTER (WHERE tm.is_manager), '')::text AS managers
 FROM teams t
@@ -308,6 +319,7 @@ ORDER BY t.name
 type ListTeamsRow struct {
 	ID       uuid.UUID `json:"id"`
 	Name     string    `json:"name"`
+	Key      string    `json:"key"`
 	Members  int32     `json:"members"`
 	Managers string    `json:"managers"`
 }
@@ -324,6 +336,7 @@ func (q *Queries) ListTeams(ctx context.Context) ([]ListTeamsRow, error) {
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
+			&i.Key,
 			&i.Members,
 			&i.Managers,
 		); err != nil {
@@ -338,7 +351,7 @@ func (q *Queries) ListTeams(ctx context.Context) ([]ListTeamsRow, error) {
 }
 
 const listUserTeams = `-- name: ListUserTeams :many
-SELECT t.id, t.name, tm.is_manager
+SELECT t.id, t.name, t.key, tm.is_manager
 FROM team_members tm JOIN teams t ON t.id = tm.team_id
 WHERE tm.user_id = $1
 ORDER BY t.name
@@ -347,6 +360,7 @@ ORDER BY t.name
 type ListUserTeamsRow struct {
 	ID        uuid.UUID `json:"id"`
 	Name      string    `json:"name"`
+	Key       string    `json:"key"`
 	IsManager bool      `json:"is_manager"`
 }
 
@@ -359,7 +373,12 @@ func (q *Queries) ListUserTeams(ctx context.Context, userID uuid.UUID) ([]ListUs
 	items := []ListUserTeamsRow{}
 	for rows.Next() {
 		var i ListUserTeamsRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.IsManager); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Key,
+			&i.IsManager,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -476,20 +495,6 @@ func (q *Queries) RemoveTeamMember(ctx context.Context, arg RemoveTeamMemberPara
 	return err
 }
 
-const renameTeam = `-- name: RenameTeam :exec
-UPDATE teams SET name = $1 WHERE id = $2
-`
-
-type RenameTeamParams struct {
-	Name string    `json:"name"`
-	ID   uuid.UUID `json:"id"`
-}
-
-func (q *Queries) RenameTeam(ctx context.Context, arg RenameTeamParams) error {
-	_, err := q.db.Exec(ctx, renameTeam, arg.Name, arg.ID)
-	return err
-}
-
 const setPassword = `-- name: SetPassword :exec
 UPDATE users SET password_hash = $1 WHERE id = $2
 `
@@ -515,6 +520,21 @@ type SetUserRoleParams struct {
 
 func (q *Queries) SetUserRole(ctx context.Context, arg SetUserRoleParams) error {
 	_, err := q.db.Exec(ctx, setUserRole, arg.Role, arg.ID)
+	return err
+}
+
+const updateTeam = `-- name: UpdateTeam :exec
+UPDATE teams SET name = $1, key = $2 WHERE id = $3
+`
+
+type UpdateTeamParams struct {
+	Name string    `json:"name"`
+	Key  string    `json:"key"`
+	ID   uuid.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateTeam(ctx context.Context, arg UpdateTeamParams) error {
+	_, err := q.db.Exec(ctx, updateTeam, arg.Name, arg.Key, arg.ID)
 	return err
 }
 

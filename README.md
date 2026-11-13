@@ -1,6 +1,6 @@
 # HRMS
 
-The company HR app: attendance with location and network checks, WFH and other requests, weekly timesheets, and team views for managers, HR and admins.
+The company HR app: attendance with location and network checks, WFH and other requests, weekly timesheets, private team task boards, and team views for managers, HR and admins.
 
 Frames (design): https://claude.ai/artifact/852jUKSLz5XPTCVwP7yNT6
 
@@ -19,7 +19,7 @@ Frames (design): https://claude.ai/artifact/852jUKSLz5XPTCVwP7yNT6
 ```bash
 make db      # Postgres on :5442, Redis on :6390
 make api     # API on :8180 (creates the tables)
-make seed    # demo company, once
+make seed    # demo company, once (includes demo tasks)
 make web     # http://localhost:3100
 ```
 
@@ -38,6 +38,8 @@ All of them use `SEED_PASSWORD` from `.env`.
 
 More people are in `backend/cmd/seed/main.go`.
 
+A database seeded before task boards existed can get the demo tasks with `cd backend && go run ./cmd/seed -demo-tasks` (it only fills empty Frontend and Backend boards).
+
 In development, the office network list includes this computer (`127.0.0.0/8`, `::1`), and the Attendance page has "test location" buttons. **Remove both local networks before going live.** The buttons don't appear in a production build.
 
 ## Who sees what
@@ -49,10 +51,13 @@ In development, the office network list includes this computer (`127.0.0.0/8`, `
 | Approve timesheets | | own teams | everyone | everyone |
 | See WFH/on-duty/correction requests | | own teams (read only) | ✓ decide | ✓ decide |
 | Holidays and timesheet projects | | | ✓ | ✓ |
+| A team's task board: see, add, edit, move, comment | members | members | members | every team |
+| Edit a team's status groups; delete any of its tasks | | team managers | | ✓ |
 | People, teams, managers, offices, networks, rules | | | | ✓ |
 
 - A manager is someone ticked as "Manages this team" on Teams and people. Ticking it gives an employee the Manager role.
 - Nobody can decide their own request or timesheet.
+- Task boards follow team membership, not role: HR sees only the boards of teams HR people are in. Anyone may delete a task they created.
 
 ## Attendance rules
 
@@ -86,6 +91,16 @@ Every refused attempt is logged and shown to the person, their manager and HR.
 - Flow: draft, then submitted (can be recalled), then approved or sent back with a note. A sent-back sheet becomes editable again.
 - Managers approve their teams; HR and Admin approve anyone.
 
+## Tasks
+
+Every team has a private board (`/tasks`). Only the team's members and Admin can open it; to anyone else its tasks do not exist.
+
+- **Task numbers** use the team's key: FE-142. Admin sets the key on Teams and people (it is suggested from the name). Changing it renames every task; numbers are never reused.
+- **Status groups** are the board's columns. Each team names its own, picks a colour and says whether each one counts as *Not started*, *Active* or *Done*. Moving a task into a Done group stamps it completed; moving it out clears that. A board always keeps one Done group, and a group with tasks needs a target group before it is deleted. Templates (Standard, Software, Design, Sales) replace every group, so they only work on an empty board.
+- **A task** has a title, description, assignees (team members only), priority, start and due dates, an estimate, labels, subtasks, comments and an activity log.
+- **Views:** board (drag cards between and within columns), list (change the status in place), calendar by due date, and *My tasks* across all your teams. Done tasks leave the board 30 days after they finish.
+- **Timesheets:** type a task key such as `FE-142` in a timesheet row's Task box. If the task is on one of your boards the row links to it, and the task shows the hours logged against it per person. Deleting a task keeps the hours on the timesheet, unlinked.
+
 ## Layout
 
 ```
@@ -95,8 +110,9 @@ backend/
   queries/               sqlc queries → internal/store
   internal/rules         check-in decisions, day totals (unit tested)
   internal/clientip      trusted-proxy IP parsing (unit tested)
+  internal/boards        status templates, team keys, task refs, labels (unit tested)
   internal/api           HTTP handlers
-web/app/(app)/           pages: dashboard, attendance, requests, timesheets, team/*, approvals, admin/*
+web/app/(app)/           pages: dashboard, attendance, requests, timesheets, tasks/*, team/*, approvals, admin/*
 infra/docker-compose.yml
 ```
 
@@ -108,7 +124,7 @@ infra/docker-compose.yml
 
 ## Next steps
 
-1. Tasks with team-private boards and custom status groups; link timesheet rows to tasks.
-2. Chat (WebSockets), calls (LiveKit), mail.
-3. Company performance dashboard for Admin.
+1. Chat (WebSockets), calls (LiveKit), mail; @mentions and notifications for tasks.
+2. Company performance dashboard for Admin, using task completion and timesheets.
+3. File storage (MinIO/S3) for task attachments.
 4. Integration tests, email alerts via River.

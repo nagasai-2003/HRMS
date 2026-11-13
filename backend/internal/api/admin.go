@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/mail"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"hrms/backend/internal/boards"
 	"hrms/backend/internal/clientip"
 	"hrms/backend/internal/store"
 )
@@ -79,7 +81,7 @@ func (s *Server) adminPeople(w http.ResponseWriter, r *http.Request) {
 		if ms == nil {
 			ms = []map[string]any{}
 		}
-		ts[i] = map[string]any{"id": t.ID, "name": t.Name, "members": ms, "managers": t.Managers}
+		ts[i] = map[string]any{"id": t.ID, "name": t.Name, "key": t.Key, "members": ms, "managers": t.Managers}
 	}
 	offices := make([]map[string]any, len(offs))
 	for i, o := range offs {
@@ -229,47 +231,98 @@ func (s *Server) adminUpdatePerson(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, personJSON(out))
 }
 
-func teamName(r *http.Request) (string, error) {
-	var in struct {
-		Name string `json:"name"`
-	}
+type teamIn struct {
+	Name    string `json:"name"`
+	Key     string `json:"key"`
+	derived bool
+}
+
+// readTeam: a name, and a key for task numbers (suggested from the name
+// when left empty).
+func readTeam(r *http.Request) (teamIn, error) {
+	var in teamIn
 	if err := readJSON(r, &in); err != nil {
-		return "", err
+		return in, err
 	}
 	in.Name = clean(in.Name, 80)
 	if in.Name == "" {
-		return "", bad("Add a team name.")
+		return in, bad("Add a team name.")
 	}
-	return in.Name, nil
+	in.Key = strings.ToUpper(strings.TrimSpace(in.Key))
+	if in.Key == "" {
+		in.Key, in.derived = boards.DeriveKey(in.Name), true
+	}
+	if !boards.ValidKey(in.Key) {
+		return in, bad("Add a short key for task numbers: 2 to 6 capital letters or digits, starting with a letter (like FE).")
+	}
+	return in, nil
 }
 
+// teamTaken says which of the team's unique values is already used.
+func teamTaken(err error) error {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "23505" {
+		if pe.ConstraintName == "teams_key_unique" {
+			return conflict("Another team already uses that key.")
+		}
+		return conflict("A team with that name exists.")
+	}
+	return err
+}
+
+// A new team starts with the default status groups.
 func (s *Server) adminCreateTeam(w http.ResponseWriter, r *http.Request) {
-	name, err := teamName(r)
+	in, err := readTeam(r)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	t, err := s.Q.CreateTeam(r.Context(), name)
+	ctx := r.Context()
+	if in.derived {
+		// A suggested key that is taken becomes RS2, RS3 and so on.
+		base := in.Key
+		for n := 2; n <= 99; n++ {
+			taken, err := s.Q.TeamKeyTaken(ctx, in.Key)
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			if !taken {
+				break
+			}
+			suffix := strconv.Itoa(n)
+			in.Key = base[:min(len(base), 6-len(suffix))] + suffix
+		}
+	}
+	var t store.Team
+	err = s.tx(ctx, func(q *store.Queries, tx pgx.Tx) error {
+		if t, err = q.CreateTeam(ctx, store.CreateTeamParams{Name: in.Name, Key: in.Key}); err != nil {
+			return teamTaken(err)
+		}
+		return createStatuses(ctx, q, t.ID, boards.Templates["default"])
+	})
 	if err != nil {
-		s.fail(w, r, uniqueAs(err, conflict("A team with that name exists.")))
+		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, t)
 }
 
+// PATCH /api/admin/teams/{id} {name, key}. Changing the key renumbers how
+// every task shows (FE-142 → WEB-142); the numbers stay.
 func (s *Server) adminRenameTeam(w http.ResponseWriter, r *http.Request) {
 	id, err := urlID(r, "id")
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	name, err := teamName(r)
+	in, err := readTeam(r)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	if err := s.Q.RenameTeam(r.Context(), store.RenameTeamParams{ID: id, Name: name}); err != nil {
-		s.fail(w, r, uniqueAs(err, conflict("A team with that name exists.")))
+	if err := s.Q.UpdateTeam(r.Context(), store.UpdateTeamParams{ID: id, Name: in.Name, Key: in.Key}); err != nil {
+		s.fail(w, r, teamTaken(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

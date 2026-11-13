@@ -10,8 +10,12 @@ SELECT * FROM timesheets WHERE user_id = @user_id AND week_start = @week_start;
 SELECT * FROM timesheets WHERE id = @id;
 
 -- name: ListEntries :many
-SELECT e.*, p.code AS project_code, p.name AS project_name
-FROM timesheet_entries e JOIN projects p ON p.id = e.project_id
+SELECT e.*, p.code AS project_code, p.name AS project_name,
+    k.title AS task_title, coalesce(tt.key || '-' || k.number, '')::text AS task_key
+FROM timesheet_entries e
+JOIN projects p ON p.id = e.project_id
+LEFT JOIN tasks k ON k.id = e.task_id
+LEFT JOIN teams tt ON tt.id = k.team_id
 WHERE e.timesheet_id = @timesheet_id
 ORDER BY e.sort, e.day;
 
@@ -19,8 +23,8 @@ ORDER BY e.sort, e.day;
 DELETE FROM timesheet_entries WHERE timesheet_id = @timesheet_id;
 
 -- name: InsertEntry :exec
-INSERT INTO timesheet_entries (timesheet_id, day, project_id, task_ref, minutes, note, sort)
-VALUES (@timesheet_id, @day, @project_id, @task_ref, @minutes, @note, @sort);
+INSERT INTO timesheet_entries (timesheet_id, day, project_id, task_ref, task_id, minutes, note, sort)
+VALUES (@timesheet_id, @day, @project_id, @task_ref, @task_id, @minutes, @note, @sort);
 
 -- Editing a rejected sheet turns it back into a draft.
 -- name: TouchTimesheet :exec

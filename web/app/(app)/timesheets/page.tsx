@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 import { addDays, dayLabel, hm, modeLabel } from "@/lib/format";
 import { Badge, Button, Card, cx, Empty, inputCls, Notice, PageHeader, statusTone } from "@/components/ui";
 
-type Entry = { id?: string; day: string; project_id: string; task_ref: string; minutes: number; note: string };
+type Entry = { id?: string; day: string; project_id: string; task_ref: string; minutes: number; note: string; task_id?: string | null; task_title?: string | null };
 type Day = { day: string; attended_min: number; logged_min: number; mode: string; holiday: string; flag: "" | "over" | "no_attendance"; future: boolean };
 type Week = {
   week_start: string;
@@ -24,7 +24,8 @@ type Week = {
   can_recall: boolean;
   can_decide: boolean;
 };
-type Row = { key: string; day: string; project_id: string; task_ref: string; hours: string; note: string };
+type Row = { key: string; day: string; project_id: string; task_ref: string; hours: string; note: string; linked?: { ref: string; id: string; title: string } };
+type MyTask = { id: string; key: string; title: string; status_category: string };
 
 const statusText = { draft: "Draft", submitted: "Waiting for approval", approved: "Approved", rejected: "Sent back" };
 
@@ -32,7 +33,10 @@ let keySeq = 0;
 const newKey = () => `r${++keySeq}`;
 
 function toRows(w: Week): Row[] {
-  return w.entries.map((e) => ({ key: newKey(), day: e.day, project_id: e.project_id, task_ref: e.task_ref, hours: String(+(e.minutes / 60).toFixed(2)), note: e.note }));
+  return w.entries.map((e) => ({
+    key: newKey(), day: e.day, project_id: e.project_id, task_ref: e.task_ref, hours: String(+(e.minutes / 60).toFixed(2)), note: e.note,
+    linked: e.task_id && e.task_title ? { ref: e.task_ref, id: e.task_id, title: e.task_title } : undefined,
+  }));
 }
 
 // "7.5", "7:30" and "7h30" all mean seven and a half hours.
@@ -57,6 +61,7 @@ function TimesheetInner() {
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   const [note, setNote] = useState("");
+  const [myTasks, setMyTasks] = useState<MyTask[]>([]);
   const [history, setHistory] = useState<{ id: string; week_start: string; status: string; total_minutes: number }[]>([]);
 
   const apply = useCallback((w: Week) => {
@@ -79,11 +84,21 @@ function TimesheetInner() {
 
   useEffect(() => {
     load(params.get("start") ?? "").catch((e) => setError(e.message));
-    if (!userId) api<{ timesheets: typeof history }>("/timesheets").then((r) => setHistory(r.timesheets)).catch(() => {});
+    if (!userId) {
+      api<{ timesheets: typeof history }>("/timesheets").then((r) => setHistory(r.timesheets)).catch(() => {});
+      api<{ tasks: MyTask[] }>("/tasks/mine").then((r) => setMyTasks(r.tasks)).catch(() => {});
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
   const parsed = useMemo(() => rows.map((r) => ({ ...r, minutes: parseHours(r.hours) })), [rows]);
+  // The task a row's Task box names: a saved link, or one of my tasks as I type.
+  const taskFor = (r: Row) => {
+    const ref = r.task_ref.trim().toUpperCase();
+    if (r.linked && r.linked.ref.toUpperCase() === ref) return r.linked;
+    const t = myTasks.find((x) => x.key === ref);
+    return t ? { ref: t.key, id: t.id, title: t.title } : undefined;
+  };
   const loggedByDay = useMemo(() => {
     const m: Record<string, number> = {};
     for (const r of parsed) if (r.minutes) m[r.day] = (m[r.day] ?? 0) + r.minutes;
@@ -222,13 +237,15 @@ function TimesheetInner() {
           <Empty>No time logged this week.</Empty>
         ) : (
           <div className="flex flex-col gap-2">
-            <div className="hidden grid-cols-[130px_minmax(0,1fr)_100px_80px_minmax(0,1.2fr)_40px] gap-2 px-1 text-xs font-semibold text-muted lg:grid">
+            <div className="hidden grid-cols-[130px_minmax(0,1fr)_110px_80px_minmax(0,1.2fr)_40px] gap-2 px-1 text-xs font-semibold text-muted lg:grid">
               <span>Day</span><span>Project</span><span>Task</span><span>Hours</span><span>What you did</span><span />
             </div>
             {parsed.map((r) => {
               const bad = r.hours.trim() !== "" && (r.minutes == null || r.minutes < 1 || r.minutes > 1440);
+              const task = taskFor(r);
               return (
-                <div key={r.key} className="grid grid-cols-2 gap-2 rounded-xl border border-line p-2 lg:grid-cols-[130px_minmax(0,1fr)_100px_80px_minmax(0,1.2fr)_40px] lg:border-0 lg:p-0">
+                <div key={r.key} className="flex flex-col gap-1">
+                <div className="grid grid-cols-2 gap-2 rounded-xl border border-line p-2 lg:grid-cols-[130px_minmax(0,1fr)_110px_80px_minmax(0,1.2fr)_40px] lg:border-0 lg:p-0">
                   <select aria-label="Day" disabled={!editable} className={cx(inputCls, "w-full min-w-0")} value={r.day} onChange={(e) => update(r.key, { day: e.target.value })}>
                     {openDays.map((d) => <option key={d.day} value={d.day}>{dayLabel(d.day)}</option>)}
                   </select>
@@ -236,15 +253,24 @@ function TimesheetInner() {
                     <option value="">Pick a project</option>
                     {week.projects.map((p) => <option key={p.id} value={p.id} disabled={!p.active}>{p.code} · {p.name}</option>)}
                   </select>
-                  <input aria-label="Task" disabled={!editable} className={cx(inputCls, "w-full min-w-0")} placeholder="FE-142" maxLength={40} value={r.task_ref} onChange={(e) => update(r.key, { task_ref: e.target.value })} />
+                  <input aria-label="Task" list="my-tasks" disabled={!editable} className={cx(inputCls, "w-full min-w-0")} placeholder="FE-142" maxLength={40} value={r.task_ref} onChange={(e) => update(r.key, { task_ref: e.target.value })} />
                   <input aria-label="Hours" aria-invalid={bad} disabled={!editable} inputMode="decimal" className={cx(inputCls, "w-full min-w-0", bad && "border-bad")} placeholder="0" value={r.hours} onChange={(e) => update(r.key, { hours: e.target.value })} />
                   <input aria-label="What you did" disabled={!editable} className={cx(inputCls, "col-span-2 w-full min-w-0 lg:col-span-1")} maxLength={300} value={r.note} onChange={(e) => update(r.key, { note: e.target.value })} />
                   {editable ? (
                     <button type="button" aria-label="Remove row" className="h-10 rounded-[10px] text-lg text-muted hover:bg-bad-soft hover:text-bad" onClick={() => { setRows((rs) => rs.filter((x) => x.key !== r.key)); setDirty(true); }}>×</button>
                   ) : <span />}
                 </div>
+                {task && (
+                  <Link href={`/tasks/${task.id}`} className="self-start px-1 text-xs font-medium text-brand hover:underline lg:ml-[calc(130px+0.5rem)]">
+                    {task.ref} · {task.title}
+                  </Link>
+                )}
+                </div>
               );
             })}
+            <datalist id="my-tasks">
+              {myTasks.filter((t) => t.status_category !== "done").map((t) => <option key={t.id} value={t.key}>{t.title}</option>)}
+            </datalist>
             {editable && (
               <div className="flex flex-wrap items-center gap-2 pt-2">
                 <Button onClick={() => addRow()}>+ Add row</Button>

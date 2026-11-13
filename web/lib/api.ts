@@ -7,9 +7,11 @@ export class ApiError extends Error {
 }
 
 export async function api<T = unknown>(path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+  const method = init.method ?? (init.body === undefined ? "GET" : "POST");
   const res = await fetch(`/api${path}`, {
-    method: init.method ?? (init.body === undefined ? "GET" : "POST"),
-    headers: init.body === undefined ? undefined : { "Content-Type": "application/json" },
+    method,
+    // The API only accepts JSON writes (its CSRF guard), DELETE included.
+    headers: method === "GET" ? undefined : { "Content-Type": "application/json" },
     body: init.body === undefined ? undefined : JSON.stringify(init.body),
     credentials: "same-origin",
     cache: "no-store",
@@ -41,6 +43,6 @@ export type Me = {
   work_policy: "office" | "hybrid" | "remote";
   remote_weekdays: number[];
   office: { id: string; name: string } | null;
-  teams: { id: string; name: string; is_manager: boolean }[];
+  teams: { id: string; name: string; key: string; is_manager: boolean }[];
   can: { team_views: boolean; decide_requests: boolean; review_timesheets: boolean; admin: boolean; holidays: boolean };
 };

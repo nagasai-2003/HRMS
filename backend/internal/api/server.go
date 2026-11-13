@@ -1,5 +1,5 @@
 // Package api is the HTTP layer: auth, attendance, requests, timesheets,
-// team views for managers/HR and admin settings.
+// team task boards, team views for managers/HR and admin settings.
 package api
 
 import (
@@ -79,6 +79,26 @@ func (s *Server) Router() http.Handler {
 			r.Put("/timesheets/week", s.saveTimesheetWeek)
 			r.Post("/timesheets/{id}/submit", s.submitTimesheet)
 			r.Post("/timesheets/{id}/recall", s.recallTimesheet)
+
+			// Team boards: members and Admin; status groups: team managers and Admin.
+			r.Get("/tasks/teams", s.taskTeams)
+			r.Get("/tasks/board", s.taskBoard)
+			r.Get("/tasks/mine", s.myTasks)
+			r.Post("/tasks", s.createTask)
+			r.Get("/tasks/{id}", s.getTask)
+			r.Patch("/tasks/{id}", s.updateTask)
+			r.Delete("/tasks/{id}", s.deleteTask)
+			r.Post("/tasks/{id}/move", s.moveTaskHandler)
+			r.Post("/tasks/{id}/checklist", s.addChecklistItem)
+			r.Patch("/tasks/{id}/checklist/{itemID}", s.updateChecklistItem)
+			r.Delete("/tasks/{id}/checklist/{itemID}", s.deleteChecklistItem)
+			r.Post("/tasks/{id}/comments", s.addComment)
+			r.Delete("/tasks/{id}/comments/{commentID}", s.deleteComment)
+			r.Post("/tasks/teams/{teamID}/statuses", s.createStatus)
+			r.Put("/tasks/teams/{teamID}/statuses/order", s.orderStatuses)
+			r.Post("/tasks/teams/{teamID}/statuses/template", s.applyTemplate)
+			r.Patch("/tasks/teams/{teamID}/statuses/{statusID}", s.updateStatus)
+			r.Delete("/tasks/teams/{teamID}/statuses/{statusID}", s.deleteStatus)
 
 			// Managers (their teams), HR and Admin (everyone).
 			r.Group(func(r chi.Router) {

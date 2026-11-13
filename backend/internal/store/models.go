@@ -58,6 +58,93 @@ func (ns NullAppRole) Value() (driver.Value, error) {
 	return string(ns.AppRole), nil
 }
 
+type StatusCategory string
+
+const (
+	StatusCategoryNotStarted StatusCategory = "not_started"
+	StatusCategoryActive     StatusCategory = "active"
+	StatusCategoryDone       StatusCategory = "done"
+)
+
+func (e *StatusCategory) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = StatusCategory(s)
+	case string:
+		*e = StatusCategory(s)
+	default:
+		return fmt.Errorf("unsupported scan type for StatusCategory: %T", src)
+	}
+	return nil
+}
+
+type NullStatusCategory struct {
+	StatusCategory StatusCategory `json:"status_category"`
+	Valid          bool           `json:"valid"` // Valid is true if StatusCategory is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullStatusCategory) Scan(value interface{}) error {
+	if value == nil {
+		ns.StatusCategory, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.StatusCategory.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullStatusCategory) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.StatusCategory), nil
+}
+
+type TaskPriority string
+
+const (
+	TaskPriorityLow    TaskPriority = "low"
+	TaskPriorityMedium TaskPriority = "medium"
+	TaskPriorityHigh   TaskPriority = "high"
+	TaskPriorityUrgent TaskPriority = "urgent"
+)
+
+func (e *TaskPriority) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TaskPriority(s)
+	case string:
+		*e = TaskPriority(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TaskPriority: %T", src)
+	}
+	return nil
+}
+
+type NullTaskPriority struct {
+	TaskPriority TaskPriority `json:"task_priority"`
+	Valid        bool         `json:"valid"` // Valid is true if TaskPriority is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTaskPriority) Scan(value interface{}) error {
+	if value == nil {
+		ns.TaskPriority, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TaskPriority.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTaskPriority) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TaskPriority), nil
+}
+
 type WorkPolicy string
 
 const (
@@ -208,10 +295,71 @@ type Session struct {
 	UserAgent string    `json:"user_agent"`
 }
 
+type Task struct {
+	ID              uuid.UUID    `json:"id"`
+	TeamID          uuid.UUID    `json:"team_id"`
+	Number          int32        `json:"number"`
+	Title           string       `json:"title"`
+	Description     string       `json:"description"`
+	StatusID        uuid.UUID    `json:"status_id"`
+	Priority        TaskPriority `json:"priority"`
+	Labels          []string     `json:"labels"`
+	StartDate       *time.Time   `json:"start_date"`
+	DueDate         *time.Time   `json:"due_date"`
+	EstimateMinutes *int32       `json:"estimate_minutes"`
+	ReporterID      uuid.UUID    `json:"reporter_id"`
+	Position        float64      `json:"position"`
+	CompletedAt     *time.Time   `json:"completed_at"`
+	CreatedAt       time.Time    `json:"created_at"`
+	UpdatedAt       time.Time    `json:"updated_at"`
+}
+
+type TaskActivity struct {
+	ID        uuid.UUID `json:"id"`
+	TaskID    uuid.UUID `json:"task_id"`
+	ActorID   uuid.UUID `json:"actor_id"`
+	Text      string    `json:"text"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type TaskAssignee struct {
+	TaskID uuid.UUID `json:"task_id"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+type TaskChecklist struct {
+	ID        uuid.UUID `json:"id"`
+	TaskID    uuid.UUID `json:"task_id"`
+	Title     string    `json:"title"`
+	Done      bool      `json:"done"`
+	Position  int32     `json:"position"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type TaskComment struct {
+	ID        uuid.UUID `json:"id"`
+	TaskID    uuid.UUID `json:"task_id"`
+	AuthorID  uuid.UUID `json:"author_id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type TaskStatus struct {
+	ID        uuid.UUID      `json:"id"`
+	TeamID    uuid.UUID      `json:"team_id"`
+	Name      string         `json:"name"`
+	Color     string         `json:"color"`
+	Category  StatusCategory `json:"category"`
+	Position  int32          `json:"position"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
 type Team struct {
 	ID        uuid.UUID `json:"id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
+	Key       string    `json:"key"`
+	TaskSeq   int32     `json:"task_seq"`
 }
 
 type TeamMember struct {
@@ -233,14 +381,15 @@ type Timesheet struct {
 }
 
 type TimesheetEntry struct {
-	ID          uuid.UUID `json:"id"`
-	TimesheetID uuid.UUID `json:"timesheet_id"`
-	Day         time.Time `json:"day"`
-	ProjectID   uuid.UUID `json:"project_id"`
-	TaskRef     string    `json:"task_ref"`
-	Minutes     int32     `json:"minutes"`
-	Note        string    `json:"note"`
-	Sort        int32     `json:"sort"`
+	ID          uuid.UUID  `json:"id"`
+	TimesheetID uuid.UUID  `json:"timesheet_id"`
+	Day         time.Time  `json:"day"`
+	ProjectID   uuid.UUID  `json:"project_id"`
+	TaskRef     string     `json:"task_ref"`
+	Minutes     int32      `json:"minutes"`
+	Note        string     `json:"note"`
+	Sort        int32      `json:"sort"`
+	TaskID      *uuid.UUID `json:"task_id"`
 }
 
 type User struct {

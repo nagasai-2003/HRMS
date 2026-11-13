@@ -1,10 +1,15 @@
 // Command seed fills an empty database with a demo company: offices, office
-// networks, teams, people in every role, projects and two weeks of history.
-// It does nothing if anyone already exists.
+// networks, teams, people in every role, projects, two weeks of history and
+// a few tasks on the Frontend and Backend boards. It does nothing if anyone
+// already exists.
+//
+// With -demo-tasks it only adds the demo tasks, to a database seeded before
+// task boards existed, and only to demo teams whose boards are empty.
 package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"math/rand/v2"
 	"net/netip"
@@ -15,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrms/backend/internal/api"
+	"hrms/backend/internal/boards"
 	"hrms/backend/internal/rules"
 	"hrms/backend/internal/store"
 )
@@ -27,6 +33,8 @@ func must(err error) {
 }
 
 func main() {
+	demoTasks := flag.Bool("demo-tasks", false, "only add demo tasks to empty Frontend and Backend boards")
+	flag.Parse()
 	ctx := context.Background()
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -41,6 +49,13 @@ func main() {
 	must(err)
 	defer pool.Close()
 	q := store.New(pool)
+	ist, _ := time.LoadLocation("Asia/Kolkata")
+	today := rules.DayOf(time.Now(), ist)
+
+	if *demoTasks {
+		seedTasks(ctx, q, today)
+		return
+	}
 
 	users, err := q.ListUsers(ctx)
 	must(err)
@@ -101,27 +116,33 @@ func main() {
 		must(err)
 		ids[p.key] = u
 	}
-	teams := map[string][]struct {
+	type member struct {
 		key     string
 		manager bool
-	}{
-		"Frontend": {{"sneha", true}, {"ananya", false}, {"vikram", false}, {"meera", false}},
-		"Backend":  {{"arjun", true}, {"rohit", false}, {"lakshmi", false}},
-		"Design":   {{"kiran", true}, {"pooja", false}},
-		"HR":       {{"priya", true}, {"rahul", false}},
 	}
-	for name, ms := range teams {
-		t, err := q.CreateTeam(ctx, name)
+	teams := []struct {
+		name, key string
+		members   []member
+	}{
+		{"Frontend", "FE", []member{{"sneha", true}, {"ananya", false}, {"vikram", false}, {"meera", false}}},
+		{"Backend", "BE", []member{{"arjun", true}, {"rohit", false}, {"lakshmi", false}}},
+		{"Design", "DS", []member{{"kiran", true}, {"pooja", false}}},
+		{"HR", "HR", []member{{"priya", true}, {"rahul", false}}},
+	}
+	for _, tm := range teams {
+		t, err := q.CreateTeam(ctx, store.CreateTeamParams{Name: tm.name, Key: tm.key})
 		must(err)
-		for _, m := range ms {
+		for i, d := range boards.Templates["default"] {
+			_, err := q.CreateStatus(ctx, store.CreateStatusParams{TeamID: t.ID, Name: d.Name, Color: d.Color, Category: d.Category, Position: int32(i)})
+			must(err)
+		}
+		for _, m := range tm.members {
 			must(q.UpsertTeamMember(ctx, store.UpsertTeamMemberParams{TeamID: t.ID, UserID: ids[m.key].ID, IsManager: m.manager}))
 		}
 	}
 
 	// Two weeks of past working days (Mon to Fri), so dashboards and
 	// timesheets have something to show.
-	ist, _ := time.LoadLocation("Asia/Kolkata")
-	today := rules.DayOf(time.Now(), ist)
 	r := rand.New(rand.NewPCG(7, 13))
 	for _, p := range people {
 		u := ids[p.key]
@@ -157,5 +178,6 @@ func main() {
 			ev(rules.ActCheckOut, out, "")
 		}
 	}
+	seedTasks(ctx, q, today)
 	fmt.Println("seed: demo company created. Sign-in emails are in README.md; the password is SEED_PASSWORD in .env.")
 }

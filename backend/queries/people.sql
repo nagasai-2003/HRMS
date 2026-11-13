@@ -43,7 +43,7 @@ DELETE FROM sessions WHERE user_id = @user_id;
 DELETE FROM sessions WHERE expires_at < now();
 
 -- name: ListTeams :many
-SELECT t.id, t.name,
+SELECT t.id, t.name, t.key,
     count(tm.user_id)::int AS members,
     coalesce(string_agg(u.name, ', ' ORDER BY u.name) FILTER (WHERE tm.is_manager), '')::text AS managers
 FROM teams t
@@ -53,10 +53,10 @@ GROUP BY t.id
 ORDER BY t.name;
 
 -- name: CreateTeam :one
-INSERT INTO teams (name) VALUES (@name) RETURNING *;
+INSERT INTO teams (name, key) VALUES (@name, @key) RETURNING *;
 
--- name: RenameTeam :exec
-UPDATE teams SET name = @name WHERE id = @id;
+-- name: UpdateTeam :exec
+UPDATE teams SET name = @name, key = @key WHERE id = @id;
 
 -- name: DeleteTeam :exec
 DELETE FROM teams WHERE id = @id;
@@ -78,7 +78,7 @@ DELETE FROM team_members WHERE team_id = @team_id AND user_id = @user_id;
 SELECT count(*)::int FROM team_members WHERE user_id = @user_id AND is_manager;
 
 -- name: ListUserTeams :many
-SELECT t.id, t.name, tm.is_manager
+SELECT t.id, t.name, t.key, tm.is_manager
 FROM team_members tm JOIN teams t ON t.id = tm.team_id
 WHERE tm.user_id = @user_id
 ORDER BY t.name;

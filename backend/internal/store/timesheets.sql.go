@@ -133,18 +133,19 @@ func (q *Queries) GetTimesheet(ctx context.Context, id uuid.UUID) (Timesheet, er
 }
 
 const insertEntry = `-- name: InsertEntry :exec
-INSERT INTO timesheet_entries (timesheet_id, day, project_id, task_ref, minutes, note, sort)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO timesheet_entries (timesheet_id, day, project_id, task_ref, task_id, minutes, note, sort)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertEntryParams struct {
-	TimesheetID uuid.UUID `json:"timesheet_id"`
-	Day         time.Time `json:"day"`
-	ProjectID   uuid.UUID `json:"project_id"`
-	TaskRef     string    `json:"task_ref"`
-	Minutes     int32     `json:"minutes"`
-	Note        string    `json:"note"`
-	Sort        int32     `json:"sort"`
+	TimesheetID uuid.UUID  `json:"timesheet_id"`
+	Day         time.Time  `json:"day"`
+	ProjectID   uuid.UUID  `json:"project_id"`
+	TaskRef     string     `json:"task_ref"`
+	TaskID      *uuid.UUID `json:"task_id"`
+	Minutes     int32      `json:"minutes"`
+	Note        string     `json:"note"`
+	Sort        int32      `json:"sort"`
 }
 
 func (q *Queries) InsertEntry(ctx context.Context, arg InsertEntryParams) error {
@@ -153,6 +154,7 @@ func (q *Queries) InsertEntry(ctx context.Context, arg InsertEntryParams) error 
 		arg.Day,
 		arg.ProjectID,
 		arg.TaskRef,
+		arg.TaskID,
 		arg.Minutes,
 		arg.Note,
 		arg.Sort,
@@ -161,23 +163,30 @@ func (q *Queries) InsertEntry(ctx context.Context, arg InsertEntryParams) error 
 }
 
 const listEntries = `-- name: ListEntries :many
-SELECT e.id, e.timesheet_id, e.day, e.project_id, e.task_ref, e.minutes, e.note, e.sort, p.code AS project_code, p.name AS project_name
-FROM timesheet_entries e JOIN projects p ON p.id = e.project_id
+SELECT e.id, e.timesheet_id, e.day, e.project_id, e.task_ref, e.minutes, e.note, e.sort, e.task_id, p.code AS project_code, p.name AS project_name,
+    k.title AS task_title, coalesce(tt.key || '-' || k.number, '')::text AS task_key
+FROM timesheet_entries e
+JOIN projects p ON p.id = e.project_id
+LEFT JOIN tasks k ON k.id = e.task_id
+LEFT JOIN teams tt ON tt.id = k.team_id
 WHERE e.timesheet_id = $1
 ORDER BY e.sort, e.day
 `
 
 type ListEntriesRow struct {
-	ID          uuid.UUID `json:"id"`
-	TimesheetID uuid.UUID `json:"timesheet_id"`
-	Day         time.Time `json:"day"`
-	ProjectID   uuid.UUID `json:"project_id"`
-	TaskRef     string    `json:"task_ref"`
-	Minutes     int32     `json:"minutes"`
-	Note        string    `json:"note"`
-	Sort        int32     `json:"sort"`
-	ProjectCode string    `json:"project_code"`
-	ProjectName string    `json:"project_name"`
+	ID          uuid.UUID  `json:"id"`
+	TimesheetID uuid.UUID  `json:"timesheet_id"`
+	Day         time.Time  `json:"day"`
+	ProjectID   uuid.UUID  `json:"project_id"`
+	TaskRef     string     `json:"task_ref"`
+	Minutes     int32      `json:"minutes"`
+	Note        string     `json:"note"`
+	Sort        int32      `json:"sort"`
+	TaskID      *uuid.UUID `json:"task_id"`
+	ProjectCode string     `json:"project_code"`
+	ProjectName string     `json:"project_name"`
+	TaskTitle   *string    `json:"task_title"`
+	TaskKey     string     `json:"task_key"`
 }
 
 func (q *Queries) ListEntries(ctx context.Context, timesheetID uuid.UUID) ([]ListEntriesRow, error) {
@@ -198,8 +207,11 @@ func (q *Queries) ListEntries(ctx context.Context, timesheetID uuid.UUID) ([]Lis
 			&i.Minutes,
 			&i.Note,
 			&i.Sort,
+			&i.TaskID,
 			&i.ProjectCode,
 			&i.ProjectName,
+			&i.TaskTitle,
+			&i.TaskKey,
 		); err != nil {
 			return nil, err
 		}
