@@ -58,6 +58,48 @@ func (ns NullAppRole) Value() (driver.Value, error) {
 	return string(ns.AppRole), nil
 }
 
+type ChannelKind string
+
+const (
+	ChannelKindTeam ChannelKind = "team"
+	ChannelKindDm   ChannelKind = "dm"
+)
+
+func (e *ChannelKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ChannelKind(s)
+	case string:
+		*e = ChannelKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ChannelKind: %T", src)
+	}
+	return nil
+}
+
+type NullChannelKind struct {
+	ChannelKind ChannelKind `json:"channel_kind"`
+	Valid       bool        `json:"valid"` // Valid is true if ChannelKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullChannelKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.ChannelKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ChannelKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullChannelKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ChannelKind), nil
+}
+
 type StatusCategory string
 
 const (
@@ -247,9 +289,57 @@ type BreakReason struct {
 	Active bool      `json:"active"`
 }
 
+type Channel struct {
+	ID            uuid.UUID   `json:"id"`
+	Kind          ChannelKind `json:"kind"`
+	TeamID        *uuid.UUID  `json:"team_id"`
+	Name          string      `json:"name"`
+	Topic         string      `json:"topic"`
+	IsDefault     bool        `json:"is_default"`
+	DmKey         *string     `json:"dm_key"`
+	CreatedBy     *uuid.UUID  `json:"created_by"`
+	ArchivedAt    *time.Time  `json:"archived_at"`
+	LastMessageAt *time.Time  `json:"last_message_at"`
+	CreatedAt     time.Time   `json:"created_at"`
+}
+
+type ChatRead struct {
+	ChannelID  uuid.UUID `json:"channel_id"`
+	UserID     uuid.UUID `json:"user_id"`
+	LastReadID int64     `json:"last_read_id"`
+}
+
+type DmMember struct {
+	ChannelID uuid.UUID `json:"channel_id"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
 type Holiday struct {
 	Day  time.Time `json:"day"`
 	Name string    `json:"name"`
+}
+
+type Message struct {
+	ID        int64       `json:"id"`
+	ChannelID uuid.UUID   `json:"channel_id"`
+	AuthorID  uuid.UUID   `json:"author_id"`
+	Body      string      `json:"body"`
+	Mentions  []uuid.UUID `json:"mentions"`
+	EditedAt  *time.Time  `json:"edited_at"`
+	DeletedAt *time.Time  `json:"deleted_at"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
+type Notification struct {
+	ID        uuid.UUID  `json:"id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	Kind      string     `json:"kind"`
+	ActorID   *uuid.UUID `json:"actor_id"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	Link      string     `json:"link"`
+	CreatedAt time.Time  `json:"created_at"`
+	ReadAt    *time.Time `json:"read_at"`
 }
 
 type Office struct {
@@ -337,11 +427,12 @@ type TaskChecklist struct {
 }
 
 type TaskComment struct {
-	ID        uuid.UUID `json:"id"`
-	TaskID    uuid.UUID `json:"task_id"`
-	AuthorID  uuid.UUID `json:"author_id"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        uuid.UUID   `json:"id"`
+	TaskID    uuid.UUID   `json:"task_id"`
+	AuthorID  uuid.UUID   `json:"author_id"`
+	Body      string      `json:"body"`
+	CreatedAt time.Time   `json:"created_at"`
+	Mentions  []uuid.UUID `json:"mentions"`
 }
 
 type TaskStatus struct {

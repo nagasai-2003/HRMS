@@ -21,6 +21,7 @@ func (s *Server) RunJobs(ctx context.Context) {
 			s.Log.Error("auto check-out", "err", err)
 		}
 		s.Q.DeleteExpiredSessions(ctx)
+		s.Q.DeleteOldNotifications(ctx)
 		select {
 		case <-ctx.Done():
 			return

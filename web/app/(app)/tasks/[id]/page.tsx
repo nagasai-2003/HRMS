@@ -7,10 +7,15 @@ import { api, ApiError } from "@/lib/api";
 import { hm } from "@/lib/format";
 import { avatarColor, categoryLabel, dueText, initials, priorities, priorityOf, TaskDetail, when } from "@/lib/tasks";
 import { Button, Card, cx, Empty, inputCls, Notice } from "@/components/ui";
+import { MentionInput } from "@/components/mention-input";
+import { RichText } from "@/components/rich-text";
+import { useMe } from "@/components/shell";
+import { PersonRef, toBody } from "@/lib/chat";
 
 export default function TaskPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const me = useMe();
   const [d, setD] = useState<TaskDetail | null>(null);
   const [error, setError] = useState("");
   const [missing, setMissing] = useState(false);
@@ -130,11 +135,13 @@ export default function TaskPage() {
                       </button>
                     )}
                   </span>
-                  <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink-2">{c.body}</p>
+                  <p className="text-sm leading-relaxed text-ink-2">
+                    <RichText body={c.body} mentions={c.mentions} me={me.id} />
+                  </p>
                 </div>
               </div>
             ))}
-            <CommentBox onSend={(body) => change(`/tasks/${id}/comments`, "POST", { body })} />
+            <CommentBox people={d.members.filter((m) => m.id !== me.id)} onSend={(body) => change(`/tasks/${id}/comments`, "POST", { body })} />
           </section>
         </article>
 
@@ -342,8 +349,9 @@ function AddLine({ placeholder, label, onAdd }: { placeholder: string; label: st
   );
 }
 
-function CommentBox({ onSend }: { onSend: (v: string) => Promise<boolean> }) {
+function CommentBox({ people, onSend }: { people: { id: string; name: string; title: string }[]; onSend: (v: string) => Promise<boolean> }) {
   const [v, setV] = useState("");
+  const [picked, setPicked] = useState<PersonRef[]>([]);
   const [busy, setBusy] = useState(false);
   return (
     <form
@@ -351,15 +359,29 @@ function CommentBox({ onSend }: { onSend: (v: string) => Promise<boolean> }) {
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
-        if (await onSend(v)) setV("");
+        if (await onSend(toBody(v, picked))) {
+          setV("");
+          setPicked([]);
+        }
         setBusy(false);
       }}
     >
-      <label className="flex flex-col gap-1.5 text-[13px] font-semibold text-ink-2">
-        Add a comment
-        <textarea rows={3} maxLength={4000} className={cx(inputCls, "h-auto py-2 font-normal")} placeholder="Write a comment for the team" value={v} onChange={(e) => setV(e.target.value)} />
-      </label>
-      <div className="flex justify-end">
+      <div className="flex flex-col gap-1.5 text-[13px] font-semibold text-ink-2">
+        <span>Add a comment</span>
+        <MentionInput
+          label="Add a comment"
+          minRows={3}
+          placeholder="Write a comment. Type @ to mention a team member."
+          value={v}
+          onChange={setV}
+          picked={picked}
+          onPick={setPicked}
+          people={people}
+          className="font-normal"
+        />
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted">People you mention get a notification. Assignees and the reporter hear about every comment.</span>
         <Button type="submit" variant="primary" disabled={busy || !v.trim()}>
           Comment
         </Button>

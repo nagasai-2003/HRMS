@@ -113,7 +113,7 @@ func seedTasks(ctx context.Context, q *store.Queries, today time.Time) {
 				}
 			}
 			for _, c := range d.comments {
-				_, err := q.AddComment(ctx, store.AddCommentParams{TaskID: task.ID, AuthorID: user(c[0]), Body: c[1]})
+				_, err := q.AddComment(ctx, store.AddCommentParams{TaskID: task.ID, AuthorID: user(c[0]), Body: c[1], Mentions: []uuid.UUID{}})
 				must(err)
 			}
 			must(q.AddActivity(ctx, store.AddActivityParams{TaskID: task.ID, ActorID: reporter, Text: "created the task in " + st.Name}))

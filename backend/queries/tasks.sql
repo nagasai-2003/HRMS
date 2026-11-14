@@ -178,7 +178,7 @@ WHERE c.task_id = @task_id
 ORDER BY c.created_at;
 
 -- name: AddComment :one
-INSERT INTO task_comments (task_id, author_id, body) VALUES (@task_id, @author_id, @body) RETURNING *;
+INSERT INTO task_comments (task_id, author_id, body, mentions) VALUES (@task_id, @author_id, @body, @mentions) RETURNING *;
 
 -- name: GetComment :one
 SELECT * FROM task_comments WHERE id = @id AND task_id = @task_id;

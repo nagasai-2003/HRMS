@@ -67,17 +67,23 @@ func (q *Queries) AddChecklistItem(ctx context.Context, arg AddChecklistItemPara
 }
 
 const addComment = `-- name: AddComment :one
-INSERT INTO task_comments (task_id, author_id, body) VALUES ($1, $2, $3) RETURNING id, task_id, author_id, body, created_at
+INSERT INTO task_comments (task_id, author_id, body, mentions) VALUES ($1, $2, $3, $4) RETURNING id, task_id, author_id, body, created_at, mentions
 `
 
 type AddCommentParams struct {
-	TaskID   uuid.UUID `json:"task_id"`
-	AuthorID uuid.UUID `json:"author_id"`
-	Body     string    `json:"body"`
+	TaskID   uuid.UUID   `json:"task_id"`
+	AuthorID uuid.UUID   `json:"author_id"`
+	Body     string      `json:"body"`
+	Mentions []uuid.UUID `json:"mentions"`
 }
 
 func (q *Queries) AddComment(ctx context.Context, arg AddCommentParams) (TaskComment, error) {
-	row := q.db.QueryRow(ctx, addComment, arg.TaskID, arg.AuthorID, arg.Body)
+	row := q.db.QueryRow(ctx, addComment,
+		arg.TaskID,
+		arg.AuthorID,
+		arg.Body,
+		arg.Mentions,
+	)
 	var i TaskComment
 	err := row.Scan(
 		&i.ID,
@@ -85,6 +91,7 @@ func (q *Queries) AddComment(ctx context.Context, arg AddCommentParams) (TaskCom
 		&i.AuthorID,
 		&i.Body,
 		&i.CreatedAt,
+		&i.Mentions,
 	)
 	return i, err
 }
@@ -334,7 +341,7 @@ func (q *Queries) GetChecklistItem(ctx context.Context, arg GetChecklistItemPara
 }
 
 const getComment = `-- name: GetComment :one
-SELECT id, task_id, author_id, body, created_at FROM task_comments WHERE id = $1 AND task_id = $2
+SELECT id, task_id, author_id, body, created_at, mentions FROM task_comments WHERE id = $1 AND task_id = $2
 `
 
 type GetCommentParams struct {
@@ -351,6 +358,7 @@ func (q *Queries) GetComment(ctx context.Context, arg GetCommentParams) (TaskCom
 		&i.AuthorID,
 		&i.Body,
 		&i.CreatedAt,
+		&i.Mentions,
 	)
 	return i, err
 }
@@ -657,19 +665,20 @@ func (q *Queries) ListChecklist(ctx context.Context, taskID uuid.UUID) ([]TaskCh
 }
 
 const listComments = `-- name: ListComments :many
-SELECT c.id, c.task_id, c.author_id, c.body, c.created_at, u.name AS author_name
+SELECT c.id, c.task_id, c.author_id, c.body, c.created_at, c.mentions, u.name AS author_name
 FROM task_comments c JOIN users u ON u.id = c.author_id
 WHERE c.task_id = $1
 ORDER BY c.created_at
 `
 
 type ListCommentsRow struct {
-	ID         uuid.UUID `json:"id"`
-	TaskID     uuid.UUID `json:"task_id"`
-	AuthorID   uuid.UUID `json:"author_id"`
-	Body       string    `json:"body"`
-	CreatedAt  time.Time `json:"created_at"`
-	AuthorName string    `json:"author_name"`
+	ID         uuid.UUID   `json:"id"`
+	TaskID     uuid.UUID   `json:"task_id"`
+	AuthorID   uuid.UUID   `json:"author_id"`
+	Body       string      `json:"body"`
+	CreatedAt  time.Time   `json:"created_at"`
+	Mentions   []uuid.UUID `json:"mentions"`
+	AuthorName string      `json:"author_name"`
 }
 
 func (q *Queries) ListComments(ctx context.Context, taskID uuid.UUID) ([]ListCommentsRow, error) {
@@ -687,6 +696,7 @@ func (q *Queries) ListComments(ctx context.Context, taskID uuid.UUID) ([]ListCom
 			&i.AuthorID,
 			&i.Body,
 			&i.CreatedAt,
+			&i.Mentions,
 			&i.AuthorName,
 		); err != nil {
 			return nil, err

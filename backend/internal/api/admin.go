@@ -15,7 +15,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"hrms/backend/internal/boards"
+	"hrms/backend/internal/chattext"
 	"hrms/backend/internal/clientip"
+	"hrms/backend/internal/live"
 	"hrms/backend/internal/store"
 )
 
@@ -299,6 +301,11 @@ func (s *Server) adminCreateTeam(w http.ResponseWriter, r *http.Request) {
 		if t, err = q.CreateTeam(ctx, store.CreateTeamParams{Name: in.Name, Key: in.Key}); err != nil {
 			return teamTaken(err)
 		}
+		if _, err := q.CreateTeamChannel(ctx, store.CreateTeamChannelParams{
+			TeamID: &t.ID, Name: chattext.DefaultChannel(t.Name), IsDefault: true,
+		}); err != nil {
+			return err
+		}
 		return createStatuses(ctx, q, t.ID, boards.Templates["default"])
 	})
 	if err != nil {
@@ -362,10 +369,20 @@ func (s *Server) adminPutMember(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	joined := false
 	err = s.tx(ctx, func(q *store.Queries, tx pgx.Tx) error {
 		u, err := q.GetUser(ctx, userID)
 		if err != nil {
 			return notFound("Person not found.")
+		}
+		if _, err := q.GetMembership(ctx, store.GetMembershipParams{TeamID: teamID, UserID: userID}); errors.Is(err, pgx.ErrNoRows) {
+			// New members start with the team's chat history marked read.
+			joined = true
+			if err := q.MarkTeamChannelsRead(ctx, store.MarkTeamChannelsReadParams{UserID: userID, TeamID: &teamID}); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
 		}
 		if err := q.UpsertTeamMember(ctx, store.UpsertTeamMemberParams{TeamID: teamID, UserID: userID, IsManager: in.IsManager}); err != nil {
 			return err
@@ -378,6 +395,9 @@ func (s *Server) adminPutMember(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, r, err)
 		return
+	}
+	if joined {
+		s.Live.Send(ctx, []uuid.UUID{userID}, live.Event{Type: "channel.changed", Data: map[string]any{"team_id": teamID}})
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

@@ -5,6 +5,7 @@
 //
 // With -demo-tasks it only adds the demo tasks, to a database seeded before
 // task boards existed, and only to demo teams whose boards are empty.
+// With -demo-chat it only adds demo channels and messages where they are empty.
 package main
 
 import (
@@ -34,6 +35,7 @@ func must(err error) {
 
 func main() {
 	demoTasks := flag.Bool("demo-tasks", false, "only add demo tasks to empty Frontend and Backend boards")
+	demoChat := flag.Bool("demo-chat", false, "only add demo channels and messages where they are empty")
 	flag.Parse()
 	ctx := context.Background()
 	dbURL := os.Getenv("DATABASE_URL")
@@ -54,6 +56,10 @@ func main() {
 
 	if *demoTasks {
 		seedTasks(ctx, q, today)
+		return
+	}
+	if *demoChat {
+		seedChat(ctx, pool, q, today, ist)
 		return
 	}
 
@@ -179,5 +185,6 @@ func main() {
 		}
 	}
 	seedTasks(ctx, q, today)
+	seedChat(ctx, pool, q, today, ist)
 	fmt.Println("seed: demo company created. Sign-in emails are in README.md; the password is SEED_PASSWORD in .env.")
 }

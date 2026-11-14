@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"hrms/backend/internal/boards"
+	"hrms/backend/internal/chattext"
 	"hrms/backend/internal/store"
 )
 
@@ -460,6 +461,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	s.notifyAssigned(ctx, u, id, in.AssigneeIDs)
 	s.writeTask(w, r, id, http.StatusCreated)
 }
 
@@ -534,11 +536,26 @@ func (s *Server) writeTask(w http.ResponseWriter, r *http.Request, id uuid.UUID,
 	for i, c := range checklist {
 		cl[i] = map[string]any{"id": c.ID, "title": c.Title, "done": c.Done}
 	}
+	var mentioned []uuid.UUID
+	for _, c := range comments {
+		mentioned = append(mentioned, c.Mentions...)
+	}
+	names, err := s.userNames(ctx, mentioned)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	cm := make([]map[string]any, len(comments))
 	for i, c := range comments {
+		ms := []map[string]any{}
+		for _, id := range c.Mentions {
+			if n, ok := names[id]; ok {
+				ms = append(ms, person(id, n))
+			}
+		}
 		cm[i] = map[string]any{
 			"id": c.ID, "author_id": c.AuthorID, "author_name": c.AuthorName, "body": c.Body, "created_at": c.CreatedAt,
-			"can_delete": c.AuthorID == u.ID || a.Admin,
+			"mentions": ms, "can_delete": c.AuthorID == u.ID || a.Admin,
 		}
 	}
 	ac := make([]map[string]any, len(activity))
@@ -584,6 +601,7 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	u := userFrom(ctx)
 	var id uuid.UUID
+	var assigned []uuid.UUID
 	err := s.tx(ctx, func(q *store.Queries, tx pgx.Tx) error {
 		t, _, err := s.loadTask(ctx, q, u, r)
 		if err != nil {
@@ -668,11 +686,12 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if in.AssigneeIDs != nil {
-			lines, err := s.setAssignees(ctx, q, t, *in.AssigneeIDs)
+			lines, added, err := s.setAssignees(ctx, q, t, *in.AssigneeIDs)
 			if err != nil {
 				return err
 			}
 			log = append(log, lines...)
+			assigned = added
 		}
 		if in.StatusID != nil && *in.StatusID != t.StatusID {
 			line, err := moveTask(ctx, q, t, *in.StatusID, -1)
@@ -692,6 +711,7 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	s.notifyAssigned(ctx, u, id, assigned)
 	s.writeTask(w, r, id, http.StatusOK)
 }
 
@@ -720,15 +740,16 @@ func dayChange(what string, from, to *time.Time) string {
 	return "set the " + what + " to " + to.Format("2 Jan 2006")
 }
 
-func (s *Server) setAssignees(ctx context.Context, q *store.Queries, t store.GetTaskRow, want []uuid.UUID) ([]string, error) {
+func (s *Server) setAssignees(ctx context.Context, q *store.Queries, t store.GetTaskRow, want []uuid.UUID) ([]string, []uuid.UUID, error) {
 	_, names, err := activeMembers(ctx, q, t.TeamID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cur, err := q.ListAssigneesFor(ctx, []uuid.UUID{t.ID})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var added []uuid.UUID
 	have := map[uuid.UUID]string{}
 	for _, a := range cur {
 		have[a.UserID] = a.Name
@@ -745,11 +766,12 @@ func (s *Server) setAssignees(ctx context.Context, q *store.Queries, t store.Get
 		}
 		name, ok := names[id]
 		if !ok {
-			return nil, bad("Only active members of this team can be assigned.")
+			return nil, nil, bad("Only active members of this team can be assigned.")
 		}
 		if err := q.AddAssignee(ctx, store.AddAssigneeParams{TaskID: t.ID, UserID: id}); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		added = append(added, id)
 		log = append(log, "assigned "+name)
 	}
 	for id, name := range have {
@@ -757,12 +779,29 @@ func (s *Server) setAssignees(ctx context.Context, q *store.Queries, t store.Get
 			continue
 		}
 		if err := q.RemoveAssignee(ctx, store.RemoveAssigneeParams{TaskID: t.ID, UserID: id}); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		log = append(log, "unassigned "+name)
 	}
 	slices.Sort(log)
-	return log, nil
+	return log, added, nil
+}
+
+// notifyAssigned tells people they were given a task.
+func (s *Server) notifyAssigned(ctx context.Context, u store.User, taskID uuid.UUID, to []uuid.UUID) {
+	if len(to) == 0 {
+		return
+	}
+	t, err := s.Q.GetTask(ctx, taskID)
+	if err != nil {
+		return
+	}
+	key := taskKey(t.TeamKey, t.Number)
+	var list []notice
+	for _, id := range to {
+		list = append(list, notice{To: id, Kind: "task_assigned", Title: u.Name + " assigned you " + key, Body: t.Title, Link: "/tasks/" + t.ID.String()})
+	}
+	s.notify(ctx, u, list)
 }
 
 // moveTask puts a task into a status group at index (-1: at the end) and
@@ -1012,11 +1051,48 @@ func (s *Server) addComment(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if _, err := s.Q.AddComment(ctx, store.AddCommentParams{TaskID: t.ID, AuthorID: u.ID, Body: body}); err != nil {
+	// Only active team members can be mentioned: they are the ones who can open the task.
+	_, members, err := activeMembers(ctx, s.Q, t.TeamID)
+	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
+	mentions := []uuid.UUID{}
+	for _, id := range chattext.Mentions(body) {
+		if _, ok := members[id]; ok && id != u.ID {
+			mentions = append(mentions, id)
+		}
+	}
+	if _, err := s.Q.AddComment(ctx, store.AddCommentParams{TaskID: t.ID, AuthorID: u.ID, Body: body, Mentions: mentions}); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.notifyComment(ctx, u, t, body, mentions, members)
 	s.writeTask(w, r, t.ID, http.StatusCreated)
+}
+
+// notifyComment: mentioned people first, then the task's assignees and
+// reporter (if they are still on the team).
+func (s *Server) notifyComment(ctx context.Context, u store.User, t store.GetTaskRow, body string, mentions []uuid.UUID, members map[uuid.UUID]string) {
+	key := taskKey(t.TeamKey, t.Number)
+	snippet := chattext.Snippet(chattext.Plain(body, members), 140)
+	link := "/tasks/" + t.ID.String()
+	var list []notice
+	for _, id := range mentions {
+		list = append(list, notice{To: id, Kind: "task_mention", Title: u.Name + " mentioned you on " + key, Body: snippet, Link: link})
+	}
+	watchers := []uuid.UUID{t.ReporterID}
+	if as, err := s.Q.ListAssigneesFor(ctx, []uuid.UUID{t.ID}); err == nil {
+		for _, a := range as {
+			watchers = append(watchers, a.UserID)
+		}
+	}
+	for _, id := range watchers {
+		if _, ok := members[id]; ok {
+			list = append(list, notice{To: id, Kind: "task_comment", Title: u.Name + " commented on " + key, Body: snippet, Link: link})
+		}
+	}
+	s.notify(ctx, u, list)
 }
 
 // DELETE /api/tasks/{id}/comments/{commentID}: the author or Admin.

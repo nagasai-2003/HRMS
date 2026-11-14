@@ -73,7 +73,7 @@ export type TaskDetail = {
   statuses: Status[];
   members: Member[];
   checklist: { id: string; title: string; done: boolean }[];
-  comments: { id: string; author_id: string; author_name: string; body: string; created_at: string; can_delete: boolean }[];
+  comments: { id: string; author_id: string; author_name: string; body: string; mentions: Person[]; created_at: string; can_delete: boolean }[];
   activity: { id: string; actor_name: string; text: string; created_at: string }[];
   time: { logged_minutes: number; by_person: { id: string; name: string; minutes: number }[] };
   can_delete: boolean;

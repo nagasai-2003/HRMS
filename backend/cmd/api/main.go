@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -62,7 +63,9 @@ func main() {
 		os.Exit(1)
 	}
 	srv := api.New(pool, rdb, clientip.Resolver{Trusted: trusted}, env("APP_ENV", "development") == "production", log)
+	srv.Origins = strings.Split(env("ALLOWED_ORIGINS", "localhost:3100,127.0.0.1:3100"), ",")
 	go srv.RunJobs(ctx)
+	go srv.Live.Run(ctx)
 
 	hs := &http.Server{
 		Addr:              env("HTTP_ADDR", ":8180"),

@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
 import { api, Me } from "@/lib/api";
+import { LiveProvider, useLive } from "@/lib/live";
+import { NotificationBell } from "./notifications";
 import { cx } from "./ui";
 
 const MeContext = createContext<Me | null>(null);
@@ -21,6 +23,7 @@ const sections: { title: string; items: NavItem[] }[] = [
     title: "My work",
     items: [
       { href: "/dashboard", label: "Dashboard", show: () => true },
+      { href: "/chat", label: "Chat", show: () => true },
       { href: "/attendance", label: "Attendance", show: () => true },
       { href: "/requests", label: "WFH and requests", show: () => true },
       { href: "/tasks", label: "Tasks", show: () => true },
@@ -50,18 +53,60 @@ const roleLabel = { employee: "Employee", manager: "Manager", hr: "HR", admin: "
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
-  const [open, setOpen] = useState(false);
-  const path = usePathname();
-  const router = useRouter();
 
   useEffect(() => {
     api<Me>("/me").then(setMe).catch(() => {});
   }, []);
-  useEffect(() => setOpen(false), [path]);
 
   if (!me) {
     return <div className="grid min-h-screen place-items-center text-sm text-muted">Loading…</div>;
   }
+  return (
+    <LiveProvider>
+      <Shell me={me}>{children}</Shell>
+    </LiveProvider>
+  );
+}
+
+/** Unread chat messages, kept fresh from live events. */
+function useChatUnread(me: Me): number {
+  const [n, setN] = useState(0);
+  const timer = useState<{ t?: ReturnType<typeof setTimeout> }>({})[0];
+  function load() {
+    clearTimeout(timer.t);
+    timer.t = setTimeout(() => {
+      api<{ unread: number }>("/chat/unread").then((d) => setN(d.unread)).catch(() => {});
+    }, 300);
+  }
+  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useLive((e) => {
+    if (e.type === "message.new" && e.data.message?.author?.id === me.id) return;
+    if (["message.new", "message.delete", "read", "channel.changed", "reconnected"].includes(e.type)) load();
+  });
+  return n;
+}
+
+/** True at the lg breakpoint and up, where the sidebar is always shown. */
+function useWide(): boolean {
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    const q = window.matchMedia("(min-width: 1024px)");
+    const on = () => setWide(q.matches);
+    on();
+    q.addEventListener("change", on);
+    return () => q.removeEventListener("change", on);
+  }, []);
+  return wide;
+}
+
+function Shell({ me, children }: { me: Me; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  // One bell only, so a new notification shows one toast.
+  const wide = useWide();
+  const path = usePathname();
+  const router = useRouter();
+  const chatUnread = useChatUnread(me);
+  useEffect(() => setOpen(false), [path]);
 
   async function signOut() {
     await api("/auth/logout", { body: {} }).catch(() => {});
@@ -90,7 +135,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                     active ? "bg-brand-soft text-brand-ink" : "text-ink-2 hover:bg-canvas",
                   )}
                 >
-                  {i.label}
+                  <span className="flex-1">{i.label}</span>
+                  {i.href === "/chat" && chatUnread > 0 && (
+                    <span className="rounded-full bg-brand px-2 py-0.5 text-[11px] font-bold text-white" aria-label={`${chatUnread} unread`}>
+                      {chatUnread > 99 ? "99+" : chatUnread}
+                    </span>
+                  )}
                 </Link>
               );
             })}
@@ -113,7 +163,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         >
           <div className="flex h-16 items-center gap-2.5 border-b border-line px-5">
             <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand font-display text-sm font-bold text-white">HR</span>
-            <span className="font-display text-lg font-bold">Workspace</span>
+            <span className="flex-1 font-display text-lg font-bold">Workspace</span>
+            {wide && <NotificationBell />}
           </div>
           {nav}
           <div className="flex items-center gap-3 border-t border-line p-4">
@@ -133,7 +184,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <button type="button" onClick={() => setOpen(true)} className="rounded-lg border border-line-2 px-3 py-1.5 text-sm font-semibold">
               Menu
             </button>
-            <span className="font-display font-bold">Workspace</span>
+            <span className="flex-1 font-display font-bold">Workspace</span>
+            {!wide && <NotificationBell align="right" />}
           </div>
           <main className="mx-auto flex max-w-[1200px] flex-col gap-5 px-4 py-6 sm:px-8 sm:py-7">{children}</main>
         </div>

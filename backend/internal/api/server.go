@@ -1,5 +1,5 @@
 // Package api is the HTTP layer: auth, attendance, requests, timesheets,
-// team task boards, team views for managers/HR and admin settings.
+// team task boards, chat and notifications, team views for managers/HR and admin settings.
 package api
 
 import (
@@ -22,6 +22,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"hrms/backend/internal/clientip"
+	"hrms/backend/internal/live"
 	"hrms/backend/internal/store"
 )
 
@@ -33,6 +34,10 @@ type Server struct {
 	Secure bool // Secure cookies (production)
 	Now    func() time.Time
 	Log    *slog.Logger
+	// Live pushes chat messages and notifications to open tabs.
+	Live *live.Hub
+	// Origins may open the live socket besides this host (ALLOWED_ORIGINS).
+	Origins []string
 
 	locMu sync.Mutex
 	locs  map[string]*time.Location
@@ -42,6 +47,7 @@ func New(pool *pgxpool.Pool, rdb *redis.Client, ip clientip.Resolver, secure boo
 	return &Server{
 		Pool: pool, Q: store.New(pool), Redis: rdb, IP: ip, Secure: secure,
 		Now: time.Now, Log: log, locs: map[string]*time.Location{},
+		Live: live.New(rdb, log),
 	}
 }
 
@@ -99,6 +105,25 @@ func (s *Server) Router() http.Handler {
 			r.Post("/tasks/teams/{teamID}/statuses/template", s.applyTemplate)
 			r.Patch("/tasks/teams/{teamID}/statuses/{statusID}", s.updateStatus)
 			r.Delete("/tasks/teams/{teamID}/statuses/{statusID}", s.deleteStatus)
+
+			// Chat: team channels (members only) and direct messages (anyone).
+			r.Get("/live", s.liveSocket)
+			r.Get("/chat/conversations", s.chatConversations)
+			r.Get("/chat/unread", s.chatUnread)
+			r.Get("/chat/people", s.chatPeople)
+			r.Get("/chat/search", s.searchMessages)
+			r.Post("/chat/dms", s.openDM)
+			r.Post("/chat/teams/{teamID}/channels", s.createChannel)
+			r.Get("/chat/channels/{id}", s.getChannel)
+			r.Patch("/chat/channels/{id}", s.updateChannel)
+			r.Get("/chat/channels/{id}/messages", s.listMessages)
+			r.Post("/chat/channels/{id}/messages", s.postMessage)
+			r.Post("/chat/channels/{id}/read", s.markRead)
+			r.Get("/chat/messages/{msgID}", s.getMessage)
+			r.Patch("/chat/messages/{msgID}", s.editMessage)
+			r.Delete("/chat/messages/{msgID}", s.deleteMessage)
+			r.Get("/notifications", s.listNotifications)
+			r.Post("/notifications/read", s.readNotifications)
 
 			// Managers (their teams), HR and Admin (everyone).
 			r.Group(func(r chi.Router) {
