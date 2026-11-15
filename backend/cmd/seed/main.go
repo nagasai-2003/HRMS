@@ -6,6 +6,10 @@
 // With -demo-tasks it only adds the demo tasks, to a database seeded before
 // task boards existed, and only to demo teams whose boards are empty.
 // With -demo-chat it only adds demo channels and messages where they are empty.
+//
+// For a real company use -first-admin -email you@company.com -name "Your Name"
+// instead: it creates only one Admin (password: SEED_PASSWORD), who then adds
+// offices, networks, teams and people in the app.
 package main
 
 import (
@@ -13,8 +17,10 @@ import (
 	"flag"
 	"fmt"
 	"math/rand/v2"
+	"net/mail"
 	"net/netip"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,6 +42,9 @@ func must(err error) {
 func main() {
 	demoTasks := flag.Bool("demo-tasks", false, "only add demo tasks to empty Frontend and Backend boards")
 	demoChat := flag.Bool("demo-chat", false, "only add demo channels and messages where they are empty")
+	firstAdmin := flag.Bool("first-admin", false, "create only the first Admin account (no demo data)")
+	adminEmail := flag.String("email", "", "with -first-admin: the Admin's email")
+	adminName := flag.String("name", "", "with -first-admin: the Admin's name")
 	flag.Parse()
 	ctx := context.Background()
 	dbURL := os.Getenv("DATABASE_URL")
@@ -67,6 +76,10 @@ func main() {
 	must(err)
 	if len(users) > 0 {
 		fmt.Println("seed: people already exist, nothing to do")
+		return
+	}
+	if *firstAdmin {
+		createFirstAdmin(ctx, q, *adminEmail, *adminName, password)
 		return
 	}
 	hash, err := api.HashPassword(password)
@@ -187,4 +200,29 @@ func main() {
 	seedTasks(ctx, q, today)
 	seedChat(ctx, pool, q, today, ist)
 	fmt.Println("seed: demo company created. Sign-in emails are in README.md; the password is SEED_PASSWORD in .env.")
+}
+
+func createFirstAdmin(ctx context.Context, q *store.Queries, email, name, password string) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	name = strings.TrimSpace(name)
+	if _, err := mail.ParseAddress(email); err != nil || !strings.Contains(email, "@") {
+		fmt.Fprintln(os.Stderr, "seed: give a valid -email for the Admin")
+		os.Exit(1)
+	}
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "seed: give the Admin's -name")
+		os.Exit(1)
+	}
+	if len(password) < 12 {
+		fmt.Fprintln(os.Stderr, "seed: SEED_PASSWORD must be 12 characters or more for a real Admin")
+		os.Exit(1)
+	}
+	hash, err := api.HashPassword(password)
+	must(err)
+	_, err = q.CreateUser(ctx, store.CreateUserParams{
+		Email: email, Name: name, Title: "Administrator", PasswordHash: hash, Role: store.AppRoleAdmin,
+		WorkPolicy: store.WorkPolicyOffice, RemoteWeekdays: []int16{},
+	})
+	must(err)
+	fmt.Printf("seed: Admin %s created. Sign in, then add offices, office networks, teams and people.\n", email)
 }

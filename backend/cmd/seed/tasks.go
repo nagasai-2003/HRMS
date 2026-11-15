@@ -37,7 +37,7 @@ func seedTasks(ctx context.Context, q *store.Queries, today time.Time) {
 				desc: "The picker lets people choose a Sunday and a day more than 3 months ahead. Both are refused by the API, so block them in the picker too."},
 			{status: "In progress", title: "Geofence error messages", labels: []string{"Attendance"}, people: []string{"meera@company.test"}, prio: store.TaskPriorityMedium, due: 4},
 			{status: "In review", title: "Attendance widget: break reason modal", labels: []string{"Attendance"}, people: []string{"employee@company.test"}, prio: store.TaskPriorityHigh, dueToday: true, estimate: 360,
-				desc: "When someone presses Start break, show the reason list from Attendance rules. A reason is required; \"Other\" needs a note of up to 140 characters. Block the break if the location or network checks fail on an office day.",
+				desc:      "When someone presses Start break, show the reason list from Attendance rules. A reason is required; \"Other\" needs a note of up to 140 characters. Block the break if the location or network checks fail on an office day.",
 				checklist: []string{"Modal layout and reason list", "Required reason validation", "Run the checks before the break", "Tests for the break flow"}, checked: 2,
 				comments: [][2]string{
 					{"manager@company.test", "Please use the reason list from settings, not a fixed one, so admin edits show up."},

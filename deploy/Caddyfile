@@ -1,0 +1,23 @@
+# SITE_ADDRESS is your domain (hr.example.com): Caddy then gets and renews a
+# free Let's Encrypt certificate by itself. Use ":80" to serve plain HTTP,
+# for example behind a Cloudflare tunnel that already does HTTPS.
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+
+	# The API, including the live chat socket (/api/live).
+	@api path /api/* /healthz
+	handle @api {
+		reverse_proxy api:8180
+	}
+
+	handle {
+		reverse_proxy web:3100
+	}
+}
