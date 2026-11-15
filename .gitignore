@@ -6,3 +6,6 @@ web/playwright-report/
 .DS_Store
 *.tsbuildinfo
 .next-check/
+
+# Server settings (passwords)
+deploy/.env
