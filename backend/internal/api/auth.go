@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"errors"
 	"net/http"
 	"slices"
@@ -67,21 +65,17 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "Email or password is wrong.")
 		return
 	}
-	raw := make([]byte, 32)
-	rand.Read(raw)
-	tok := base64.RawURLEncoding.EncodeToString(raw)
-	exp := s.Now().Add(sessionTTL)
-	if err := s.Q.CreateSession(r.Context(), store.CreateSessionParams{
-		TokenHash: tokenHash(tok), UserID: u.ID, ExpiresAt: exp, Ip: ip, UserAgent: clean(r.UserAgent(), 300),
-	}); err != nil {
+	// The password only opens the second step: a code from the
+	// authenticator app, or setting one up the first time.
+	stage := stageCode
+	if u.MfaEnabledAt == nil {
+		stage = stageSetup
+	}
+	if err := s.startSession(r.Context(), w, r, u, stage); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: tok, Path: "/", Expires: exp,
-		HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteLaxMode,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "role": u.Role})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "next": stage})
 }
 
 // allowLogin: at most 20 tries per IP and 10 per email in 15 minutes.
@@ -200,6 +194,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	role := u.Role
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id": u.ID, "name": u.Name, "email": u.Email, "title": u.Title, "role": role,
+		"is_owner": u.IsOwner, "mfa_enabled_at": u.MfaEnabledAt,
 		"work_policy": u.WorkPolicy, "remote_weekdays": u.RemoteWeekdays, "office": office,
 		"teams": teams,
 		"can": map[string]bool{

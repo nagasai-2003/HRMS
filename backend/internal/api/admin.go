@@ -42,8 +42,11 @@ func personJSON(u store.User) map[string]any {
 		"id": u.ID, "email": u.Email, "name": u.Name, "title": u.Title, "role": u.Role,
 		"work_policy": u.WorkPolicy, "remote_weekdays": u.RemoteWeekdays, "office_id": u.OfficeID,
 		"active": u.Active, "created_at": u.CreatedAt,
+		"is_owner": u.IsOwner, "mfa_on": u.MfaEnabledAt != nil,
 	}
 }
+
+var errOwnerOnly = forbidden("Only the Owner can change the Owner's account.")
 
 // GET /api/admin/people: people, teams with members, offices.
 func (s *Server) adminPeople(w http.ResponseWriter, r *http.Request) {
@@ -201,6 +204,15 @@ func (s *Server) adminUpdatePerson(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, bad("You cannot remove your own admin access."))
 		return
 	}
+	target, err := s.Q.GetUser(ctx, id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if target.IsOwner && !me.IsOwner {
+		s.fail(w, r, errOwnerOnly)
+		return
+	}
 	var out store.User
 	err = s.tx(ctx, func(q *store.Queries, tx pgx.Tx) error {
 		var err error
@@ -231,6 +243,104 @@ func (s *Server) adminUpdatePerson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, personJSON(out))
+}
+
+// POST /api/admin/people/{id}/reset-mfa: for a lost phone. They set up the
+// authenticator again at their next sign-in.
+func (s *Server) adminResetMFA(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := urlID(r, "id")
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	me := userFrom(ctx)
+	if id == me.ID {
+		s.fail(w, r, bad("You cannot reset your own authenticator here. Ask another Admin, or sign in with a recovery code."))
+		return
+	}
+	target, err := s.Q.GetUser(ctx, id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if target.IsOwner && !me.IsOwner {
+		s.fail(w, r, errOwnerOnly)
+		return
+	}
+	err = s.tx(ctx, func(q *store.Queries, tx pgx.Tx) error {
+		if err := q.ResetMFA(ctx, id); err != nil {
+			return err
+		}
+		if err := q.DeleteRecoveryCodes(ctx, id); err != nil {
+			return err
+		}
+		return q.DeleteUserSessions(ctx, id)
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// POST /api/admin/people/{id}/make-owner: the Owner hands the role to another
+// Admin, confirmed with a code from the Owner's own authenticator.
+func (s *Server) adminMakeOwner(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := urlID(r, "id")
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var in codeIn
+	if err := readJSON(r, &in); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	me := userFrom(ctx)
+	if !me.IsOwner {
+		s.fail(w, r, forbidden("Only the Owner can hand over the Owner role."))
+		return
+	}
+	if id == me.ID {
+		s.fail(w, r, bad("You are already the Owner."))
+		return
+	}
+	target, err := s.Q.GetUser(ctx, id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if target.Role != store.AppRoleAdmin || !target.Active {
+		s.fail(w, r, bad("Only an active Admin can become the Owner. Make them an Admin first."))
+		return
+	}
+	if target.MfaEnabledAt == nil {
+		s.fail(w, r, bad(target.Name+" has to sign in once and set up the authenticator first."))
+		return
+	}
+	err = s.tx(ctx, func(q *store.Queries, tx pgx.Tx) error {
+		if err := s.checkTOTP(ctx, q, me, in.Code); err != nil {
+			return err
+		}
+		if err := q.ClearOwner(ctx); err != nil {
+			return err
+		}
+		n, err := q.MakeOwner(ctx, id)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return conflict("They are no longer an active Admin.")
+		}
+		return nil
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 type teamIn struct {

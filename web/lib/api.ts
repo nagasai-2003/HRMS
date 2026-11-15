@@ -40,6 +40,9 @@ export type Me = {
   email: string;
   title: string;
   role: Role;
+  /** The one Admin other Admins cannot change. */
+  is_owner: boolean;
+  mfa_enabled_at: string | null;
   work_policy: "office" | "hybrid" | "remote";
   remote_weekdays: number[];
   office: { id: string; name: string } | null;

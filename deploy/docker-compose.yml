@@ -44,6 +44,10 @@ services:
       # Only Caddy may say who the visitor is (X-Forwarded-For).
       TRUSTED_PROXIES: 172.31.0.10/32
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      # Encrypts authenticator secrets. Keep a copy: without it nobody can sign in.
+      MFA_KEY: ${MFA_KEY:?Set MFA_KEY in deploy/.env}
+      # The name people see in their authenticator app.
+      MFA_ISSUER: ${MFA_ISSUER:-HR Workspace}
       # Used only by the one-time setup commands (seed).
       SEED_PASSWORD: ${SEED_PASSWORD:-}
     depends_on:

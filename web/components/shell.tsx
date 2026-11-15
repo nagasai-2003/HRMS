@@ -28,6 +28,7 @@ const sections: { title: string; items: NavItem[] }[] = [
       { href: "/requests", label: "WFH and requests", show: () => true },
       { href: "/tasks", label: "Tasks", show: () => true },
       { href: "/timesheets", label: "Timesheets", show: () => true },
+      { href: "/security", label: "Sign-in security", show: () => true },
     ],
   },
   {
@@ -171,7 +172,7 @@ function Shell({ me, children }: { me: Me; children: ReactNode }) {
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#dfe6f8] text-[13px] font-bold text-brand-ink">{initials}</span>
             <div className="flex min-w-0 flex-1 flex-col">
               <span className="truncate text-sm font-semibold">{me.name}</span>
-              <span className="text-xs text-muted">{roleLabel[me.role]}{me.teams.length ? ` · ${me.teams.map((t) => t.name).join(", ")}` : ""}</span>
+              <span className="text-xs text-muted">{me.is_owner ? "Owner" : roleLabel[me.role]}{me.teams.length ? ` · ${me.teams.map((t) => t.name).join(", ")}` : ""}</span>
             </div>
             <button type="button" onClick={signOut} className="rounded-lg px-2 py-1 text-xs font-semibold text-muted hover:bg-canvas hover:text-ink">
               Sign out

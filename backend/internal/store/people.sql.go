@@ -12,6 +12,31 @@ import (
 	"github.com/google/uuid"
 )
 
+const addRecoveryCode = `-- name: AddRecoveryCode :exec
+INSERT INTO mfa_recovery_codes (user_id, code_hash) VALUES ($1, $2)
+`
+
+type AddRecoveryCodeParams struct {
+	UserID   uuid.UUID `json:"user_id"`
+	CodeHash []byte    `json:"code_hash"`
+}
+
+func (q *Queries) AddRecoveryCode(ctx context.Context, arg AddRecoveryCodeParams) error {
+	_, err := q.db.Exec(ctx, addRecoveryCode, arg.UserID, arg.CodeHash)
+	return err
+}
+
+const clearOwner = `-- name: ClearOwner :exec
+
+UPDATE users SET is_owner = false WHERE is_owner
+`
+
+// ---- Owner ----
+func (q *Queries) ClearOwner(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, clearOwner)
+	return err
+}
+
 const countManagedTeams = `-- name: CountManagedTeams :one
 SELECT count(*)::int FROM team_members WHERE user_id = $1 AND is_manager
 `
@@ -23,9 +48,20 @@ func (q *Queries) CountManagedTeams(ctx context.Context, userID uuid.UUID) (int3
 	return column_1, err
 }
 
+const countRecoveryCodesLeft = `-- name: CountRecoveryCodesLeft :one
+SELECT count(*)::int FROM mfa_recovery_codes WHERE user_id = $1 AND used_at IS NULL
+`
+
+func (q *Queries) CountRecoveryCodesLeft(ctx context.Context, userID uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countRecoveryCodesLeft, userID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createSession = `-- name: CreateSession :exec
-INSERT INTO sessions (token_hash, user_id, expires_at, ip, user_agent)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO sessions (token_hash, user_id, expires_at, ip, user_agent, stage)
+VALUES ($1, $2, $3, $4, $5, $6)
 `
 
 type CreateSessionParams struct {
@@ -34,6 +70,7 @@ type CreateSessionParams struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	Ip        string    `json:"ip"`
 	UserAgent string    `json:"user_agent"`
+	Stage     string    `json:"stage"`
 }
 
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
@@ -43,6 +80,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 		arg.ExpiresAt,
 		arg.Ip,
 		arg.UserAgent,
+		arg.Stage,
 	)
 	return err
 }
@@ -72,7 +110,7 @@ func (q *Queries) CreateTeam(ctx context.Context, arg CreateTeamParams) (Team, e
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, name, title, password_hash, role, work_policy, remote_weekdays, office_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at
+RETURNING id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at, is_owner, mfa_secret, mfa_enabled_at, mfa_last_step
 `
 
 type CreateUserParams struct {
@@ -110,6 +148,10 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.OfficeID,
 		&i.Active,
 		&i.CreatedAt,
+		&i.IsOwner,
+		&i.MfaSecret,
+		&i.MfaEnabledAt,
+		&i.MfaLastStep,
 	)
 	return i, err
 }
@@ -120,6 +162,15 @@ DELETE FROM sessions WHERE expires_at < now()
 
 func (q *Queries) DeleteExpiredSessions(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, deleteExpiredSessions)
+	return err
+}
+
+const deleteRecoveryCodes = `-- name: DeleteRecoveryCodes :exec
+DELETE FROM mfa_recovery_codes WHERE user_id = $1
+`
+
+func (q *Queries) DeleteRecoveryCodes(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteRecoveryCodes, userID)
 	return err
 }
 
@@ -150,11 +201,65 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID uuid.UUID) erro
 	return err
 }
 
-const getSessionUser = `-- name: GetSessionUser :one
-SELECT u.id, u.email, u.name, u.title, u.password_hash, u.role, u.work_policy, u.remote_weekdays, u.office_id, u.active, u.created_at FROM sessions s JOIN users u ON u.id = s.user_id
-WHERE s.token_hash = $1 AND s.expires_at > now() AND u.active
+const enableMFA = `-- name: EnableMFA :execrows
+UPDATE users SET mfa_enabled_at = now(), mfa_last_step = $1
+WHERE id = $2 AND mfa_secret IS NOT NULL AND mfa_enabled_at IS NULL
 `
 
+type EnableMFAParams struct {
+	Step int64     `json:"step"`
+	ID   uuid.UUID `json:"id"`
+}
+
+func (q *Queries) EnableMFA(ctx context.Context, arg EnableMFAParams) (int64, error) {
+	result, err := q.db.Exec(ctx, enableMFA, arg.Step, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getPendingSession = `-- name: GetPendingSession :one
+SELECT u.id, u.email, u.name, u.title, u.password_hash, u.role, u.work_policy, u.remote_weekdays, u.office_id, u.active, u.created_at, u.is_owner, u.mfa_secret, u.mfa_enabled_at, u.mfa_last_step, s.stage FROM sessions s JOIN users u ON u.id = s.user_id
+WHERE s.token_hash = $1 AND s.expires_at > now() AND u.active AND s.stage <> 'full'
+`
+
+type GetPendingSessionRow struct {
+	User  User   `json:"user"`
+	Stage string `json:"stage"`
+}
+
+// A sign-in waiting for a code or for the authenticator to be set up.
+func (q *Queries) GetPendingSession(ctx context.Context, tokenHash []byte) (GetPendingSessionRow, error) {
+	row := q.db.QueryRow(ctx, getPendingSession, tokenHash)
+	var i GetPendingSessionRow
+	err := row.Scan(
+		&i.User.ID,
+		&i.User.Email,
+		&i.User.Name,
+		&i.User.Title,
+		&i.User.PasswordHash,
+		&i.User.Role,
+		&i.User.WorkPolicy,
+		&i.User.RemoteWeekdays,
+		&i.User.OfficeID,
+		&i.User.Active,
+		&i.User.CreatedAt,
+		&i.User.IsOwner,
+		&i.User.MfaSecret,
+		&i.User.MfaEnabledAt,
+		&i.User.MfaLastStep,
+		&i.Stage,
+	)
+	return i, err
+}
+
+const getSessionUser = `-- name: GetSessionUser :one
+SELECT u.id, u.email, u.name, u.title, u.password_hash, u.role, u.work_policy, u.remote_weekdays, u.office_id, u.active, u.created_at, u.is_owner, u.mfa_secret, u.mfa_enabled_at, u.mfa_last_step FROM sessions s JOIN users u ON u.id = s.user_id
+WHERE s.token_hash = $1 AND s.expires_at > now() AND u.active AND s.stage = 'full'
+`
+
+// Only sessions that passed the authenticator code use the app.
 func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, error) {
 	row := q.db.QueryRow(ctx, getSessionUser, tokenHash)
 	var i User
@@ -170,12 +275,16 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.OfficeID,
 		&i.Active,
 		&i.CreatedAt,
+		&i.IsOwner,
+		&i.MfaSecret,
+		&i.MfaEnabledAt,
+		&i.MfaLastStep,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at FROM users WHERE id = $1
+SELECT id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at, is_owner, mfa_secret, mfa_enabled_at, mfa_last_step FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
@@ -193,12 +302,16 @@ func (q *Queries) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.OfficeID,
 		&i.Active,
 		&i.CreatedAt,
+		&i.IsOwner,
+		&i.MfaSecret,
+		&i.MfaEnabledAt,
+		&i.MfaLastStep,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at FROM users WHERE lower(email) = lower($1)
+SELECT id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at, is_owner, mfa_secret, mfa_enabled_at, mfa_last_step FROM users WHERE lower(email) = lower($1)
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -216,6 +329,10 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.OfficeID,
 		&i.Active,
 		&i.CreatedAt,
+		&i.IsOwner,
+		&i.MfaSecret,
+		&i.MfaEnabledAt,
+		&i.MfaLastStep,
 	)
 	return i, err
 }
@@ -390,7 +507,7 @@ func (q *Queries) ListUserTeams(ctx context.Context, userID uuid.UUID) ([]ListUs
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at FROM users ORDER BY active DESC, name
+SELECT id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at, is_owner, mfa_secret, mfa_enabled_at, mfa_last_step FROM users ORDER BY active DESC, name
 `
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
@@ -414,6 +531,10 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.OfficeID,
 			&i.Active,
 			&i.CreatedAt,
+			&i.IsOwner,
+			&i.MfaSecret,
+			&i.MfaEnabledAt,
+			&i.MfaLastStep,
 		); err != nil {
 			return nil, err
 		}
@@ -423,6 +544,18 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const makeOwner = `-- name: MakeOwner :execrows
+UPDATE users SET is_owner = true WHERE id = $1 AND role = 'admin' AND active
+`
+
+func (q *Queries) MakeOwner(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, makeOwner, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const managedUserIDs = `-- name: ManagedUserIDs :many
@@ -495,6 +628,32 @@ func (q *Queries) RemoveTeamMember(ctx context.Context, arg RemoveTeamMemberPara
 	return err
 }
 
+const resetMFA = `-- name: ResetMFA :exec
+UPDATE users SET mfa_secret = NULL, mfa_enabled_at = NULL, mfa_last_step = 0 WHERE id = $1
+`
+
+func (q *Queries) ResetMFA(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, resetMFA, id)
+	return err
+}
+
+const setMFASecret = `-- name: SetMFASecret :exec
+
+UPDATE users SET mfa_secret = $1, mfa_enabled_at = NULL, mfa_last_step = 0 WHERE id = $2
+`
+
+type SetMFASecretParams struct {
+	MfaSecret []byte    `json:"mfa_secret"`
+	ID        uuid.UUID `json:"id"`
+}
+
+// ---- Authenticator ----
+// A new secret, not in use until a first code confirms it.
+func (q *Queries) SetMFASecret(ctx context.Context, arg SetMFASecretParams) error {
+	_, err := q.db.Exec(ctx, setMFASecret, arg.MfaSecret, arg.ID)
+	return err
+}
+
 const setPassword = `-- name: SetPassword :exec
 UPDATE users SET password_hash = $1 WHERE id = $2
 `
@@ -543,7 +702,7 @@ UPDATE users SET
     name = $1, title = $2, role = $3, work_policy = $4,
     remote_weekdays = $5, office_id = $6, active = $7
 WHERE id = $8
-RETURNING id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at
+RETURNING id, email, name, title, password_hash, role, work_policy, remote_weekdays, office_id, active, created_at, is_owner, mfa_secret, mfa_enabled_at, mfa_last_step
 `
 
 type UpdateUserParams struct {
@@ -581,6 +740,10 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.OfficeID,
 		&i.Active,
 		&i.CreatedAt,
+		&i.IsOwner,
+		&i.MfaSecret,
+		&i.MfaEnabledAt,
+		&i.MfaLastStep,
 	)
 	return i, err
 }
@@ -599,4 +762,40 @@ type UpsertTeamMemberParams struct {
 func (q *Queries) UpsertTeamMember(ctx context.Context, arg UpsertTeamMemberParams) error {
 	_, err := q.db.Exec(ctx, upsertTeamMember, arg.TeamID, arg.UserID, arg.IsManager)
 	return err
+}
+
+const useMFAStep = `-- name: UseMFAStep :execrows
+UPDATE users SET mfa_last_step = $1 WHERE id = $2 AND mfa_last_step < $1
+`
+
+type UseMFAStepParams struct {
+	Step int64     `json:"step"`
+	ID   uuid.UUID `json:"id"`
+}
+
+// Claims a 30-second step; 0 rows means the code was already used.
+func (q *Queries) UseMFAStep(ctx context.Context, arg UseMFAStepParams) (int64, error) {
+	result, err := q.db.Exec(ctx, useMFAStep, arg.Step, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const useRecoveryCode = `-- name: UseRecoveryCode :execrows
+UPDATE mfa_recovery_codes SET used_at = now()
+WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL
+`
+
+type UseRecoveryCodeParams struct {
+	UserID   uuid.UUID `json:"user_id"`
+	CodeHash []byte    `json:"code_hash"`
+}
+
+func (q *Queries) UseRecoveryCode(ctx context.Context, arg UseRecoveryCodeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, useRecoveryCode, arg.UserID, arg.CodeHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

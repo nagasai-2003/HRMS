@@ -330,6 +330,13 @@ type Message struct {
 	CreatedAt time.Time   `json:"created_at"`
 }
 
+type MfaRecoveryCode struct {
+	ID       uuid.UUID  `json:"id"`
+	UserID   uuid.UUID  `json:"user_id"`
+	CodeHash []byte     `json:"code_hash"`
+	UsedAt   *time.Time `json:"used_at"`
+}
+
 type Notification struct {
 	ID        uuid.UUID  `json:"id"`
 	UserID    uuid.UUID  `json:"user_id"`
@@ -383,6 +390,7 @@ type Session struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	Ip        string    `json:"ip"`
 	UserAgent string    `json:"user_agent"`
+	Stage     string    `json:"stage"`
 }
 
 type Task struct {
@@ -495,4 +503,8 @@ type User struct {
 	OfficeID       *uuid.UUID `json:"office_id"`
 	Active         bool       `json:"active"`
 	CreatedAt      time.Time  `json:"created_at"`
+	IsOwner        bool       `json:"is_owner"`
+	MfaSecret      []byte     `json:"mfa_secret"`
+	MfaEnabledAt   *time.Time `json:"mfa_enabled_at"`
+	MfaLastStep    int64      `json:"mfa_last_step"`
 }

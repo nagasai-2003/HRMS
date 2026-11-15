@@ -19,8 +19,12 @@ import (
 
 	"hrms/backend/internal/api"
 	"hrms/backend/internal/clientip"
+	"hrms/backend/internal/mfa"
 	"hrms/backend/migrations"
 )
+
+// Development only: never use it on a server.
+const devMFAKey = "6465762d6f6e6c792d6d66612d6b65792d646f2d6e6f742d7573652d696e2d70"
 
 func env(k, def string) string {
 	if v := os.Getenv(k); v != "" {
@@ -62,7 +66,24 @@ func main() {
 		log.Error("TRUSTED_PROXIES", "err", err)
 		os.Exit(1)
 	}
-	srv := api.New(pool, rdb, clientip.Resolver{Trusted: trusted}, env("APP_ENV", "development") == "production", log)
+	prod := env("APP_ENV", "development") == "production"
+	srv := api.New(pool, rdb, clientip.Resolver{Trusted: trusted}, prod, log)
+	// MFA_KEY encrypts authenticator secrets. Development has a fixed key;
+	// production must set its own and keep it with the backups.
+	mfaKey := env("MFA_KEY", "")
+	if mfaKey == "" {
+		if prod {
+			log.Error("MFA_KEY is required in production (openssl rand -hex 32)")
+			os.Exit(1)
+		}
+		mfaKey = devMFAKey
+		log.Warn("MFA_KEY not set: using the development key")
+	}
+	if srv.MFA, err = mfa.NewBox(mfaKey); err != nil {
+		log.Error("MFA_KEY", "err", err)
+		os.Exit(1)
+	}
+	srv.Issuer = env("MFA_ISSUER", "HR Workspace")
 	srv.Origins = strings.Split(env("ALLOWED_ORIGINS", "localhost:3100,127.0.0.1:3100"), ",")
 	go srv.RunJobs(ctx)
 	go srv.Live.Run(ctx)

@@ -8,8 +8,13 @@
 // With -demo-chat it only adds demo channels and messages where they are empty.
 //
 // For a real company use -first-admin -email you@company.com -name "Your Name"
-// instead: it creates only one Admin (password: SEED_PASSWORD), who then adds
-// offices, networks, teams and people in the app.
+// instead: it creates only one Admin, the Owner (password: SEED_PASSWORD),
+// who sets up an authenticator at the first sign-in and then adds offices,
+// networks, teams and people in the app.
+//
+// -reset-mfa -email someone@company.com clears a person's authenticator
+// (for a lost phone, including the Owner's). They set it up again at the
+// next sign-in. It needs no SEED_PASSWORD.
 package main
 
 import (
@@ -45,11 +50,19 @@ func main() {
 	firstAdmin := flag.Bool("first-admin", false, "create only the first Admin account (no demo data)")
 	adminEmail := flag.String("email", "", "with -first-admin: the Admin's email")
 	adminName := flag.String("name", "", "with -first-admin: the Admin's name")
+	resetMFA := flag.Bool("reset-mfa", false, "clear the authenticator of the person with -email")
 	flag.Parse()
 	ctx := context.Background()
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		dbURL = "postgres://hrms:hrms-dev@localhost:5442/hrms?sslmode=disable"
+	}
+	if *resetMFA {
+		pool, err := pgxpool.New(ctx, dbURL)
+		must(err)
+		defer pool.Close()
+		resetAuthenticator(ctx, store.New(pool), *adminEmail)
+		return
 	}
 	password := os.Getenv("SEED_PASSWORD")
 	if len(password) < 10 {
@@ -135,6 +148,9 @@ func main() {
 		must(err)
 		ids[p.key] = u
 	}
+	// The demo Admin is the Owner.
+	_, err = q.MakeOwner(ctx, ids["rahul"].ID)
+	must(err)
 	type member struct {
 		key     string
 		manager bool
@@ -219,10 +235,27 @@ func createFirstAdmin(ctx context.Context, q *store.Queries, email, name, passwo
 	}
 	hash, err := api.HashPassword(password)
 	must(err)
-	_, err = q.CreateUser(ctx, store.CreateUserParams{
+	u, err := q.CreateUser(ctx, store.CreateUserParams{
 		Email: email, Name: name, Title: "Administrator", PasswordHash: hash, Role: store.AppRoleAdmin,
 		WorkPolicy: store.WorkPolicyOffice, RemoteWeekdays: []int16{},
 	})
 	must(err)
-	fmt.Printf("seed: Admin %s created. Sign in, then add offices, office networks, teams and people.\n", email)
+	n, err := q.MakeOwner(ctx, u.ID)
+	must(err)
+	if n != 1 {
+		must(fmt.Errorf("could not make %s the Owner", email))
+	}
+	fmt.Printf("seed: Admin %s created as the Owner. Sign in, set up the authenticator app, then add offices, office networks, teams and people.\n", email)
+}
+
+func resetAuthenticator(ctx context.Context, q *store.Queries, email string) {
+	u, err := q.GetUserByEmail(ctx, strings.TrimSpace(email))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "seed: no one has the email", email)
+		os.Exit(1)
+	}
+	must(q.ResetMFA(ctx, u.ID))
+	must(q.DeleteRecoveryCodes(ctx, u.ID))
+	must(q.DeleteUserSessions(ctx, u.ID))
+	fmt.Printf("seed: authenticator cleared for %s. They set it up again at the next sign-in.\n", u.Email)
 }

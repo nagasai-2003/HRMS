@@ -25,13 +25,57 @@ UPDATE users SET role = @role WHERE id = @id;
 -- name: SetPassword :exec
 UPDATE users SET password_hash = @password_hash WHERE id = @id;
 
--- name: CreateSession :exec
-INSERT INTO sessions (token_hash, user_id, expires_at, ip, user_agent)
-VALUES (@token_hash, @user_id, @expires_at, @ip, @user_agent);
+-- ---- Owner ----
 
+-- name: ClearOwner :exec
+UPDATE users SET is_owner = false WHERE is_owner;
+
+-- name: MakeOwner :execrows
+UPDATE users SET is_owner = true WHERE id = @id AND role = 'admin' AND active;
+
+-- ---- Authenticator ----
+
+-- A new secret, not in use until a first code confirms it.
+-- name: SetMFASecret :exec
+UPDATE users SET mfa_secret = @mfa_secret, mfa_enabled_at = NULL, mfa_last_step = 0 WHERE id = @id;
+
+-- name: EnableMFA :execrows
+UPDATE users SET mfa_enabled_at = now(), mfa_last_step = @step
+WHERE id = @id AND mfa_secret IS NOT NULL AND mfa_enabled_at IS NULL;
+
+-- Claims a 30-second step; 0 rows means the code was already used.
+-- name: UseMFAStep :execrows
+UPDATE users SET mfa_last_step = @step WHERE id = @id AND mfa_last_step < @step;
+
+-- name: ResetMFA :exec
+UPDATE users SET mfa_secret = NULL, mfa_enabled_at = NULL, mfa_last_step = 0 WHERE id = @id;
+
+-- name: DeleteRecoveryCodes :exec
+DELETE FROM mfa_recovery_codes WHERE user_id = @user_id;
+
+-- name: AddRecoveryCode :exec
+INSERT INTO mfa_recovery_codes (user_id, code_hash) VALUES (@user_id, @code_hash);
+
+-- name: UseRecoveryCode :execrows
+UPDATE mfa_recovery_codes SET used_at = now()
+WHERE user_id = @user_id AND code_hash = @code_hash AND used_at IS NULL;
+
+-- name: CountRecoveryCodesLeft :one
+SELECT count(*)::int FROM mfa_recovery_codes WHERE user_id = @user_id AND used_at IS NULL;
+
+-- name: CreateSession :exec
+INSERT INTO sessions (token_hash, user_id, expires_at, ip, user_agent, stage)
+VALUES (@token_hash, @user_id, @expires_at, @ip, @user_agent, @stage);
+
+-- Only sessions that passed the authenticator code use the app.
 -- name: GetSessionUser :one
 SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id
-WHERE s.token_hash = @token_hash AND s.expires_at > now() AND u.active;
+WHERE s.token_hash = @token_hash AND s.expires_at > now() AND u.active AND s.stage = 'full';
+
+-- A sign-in waiting for a code or for the authenticator to be set up.
+-- name: GetPendingSession :one
+SELECT sqlc.embed(u), s.stage FROM sessions s JOIN users u ON u.id = s.user_id
+WHERE s.token_hash = @token_hash AND s.expires_at > now() AND u.active AND s.stage <> 'full';
 
 -- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = @token_hash;

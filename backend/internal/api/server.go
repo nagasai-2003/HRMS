@@ -23,6 +23,7 @@ import (
 
 	"hrms/backend/internal/clientip"
 	"hrms/backend/internal/live"
+	"hrms/backend/internal/mfa"
 	"hrms/backend/internal/store"
 )
 
@@ -38,6 +39,10 @@ type Server struct {
 	Live *live.Hub
 	// Origins may open the live socket besides this host (ALLOWED_ORIGINS).
 	Origins []string
+	// MFA encrypts authenticator secrets (MFA_KEY); Issuer is the name
+	// people see in their authenticator app.
+	MFA    *mfa.Box
+	Issuer string
 
 	locMu sync.Mutex
 	locs  map[string]*time.Location
@@ -66,10 +71,21 @@ func (s *Server) Router() http.Handler {
 		r.Post("/auth/login", s.login)
 		r.Post("/auth/logout", s.logout)
 
+		// The second sign-in step: a pending session from the password.
+		r.Group(func(r chi.Router) {
+			r.Use(s.requirePending)
+			r.Get("/auth/mfa", s.mfaState)
+			r.Post("/auth/mfa/setup", s.mfaSetupStart)
+			r.Post("/auth/mfa/setup/confirm", s.mfaSetupConfirm)
+			r.Post("/auth/mfa/verify", s.mfaVerify)
+		})
+
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireUser)
 			r.Get("/me", s.me)
 			r.Get("/me/summary", s.mySummary)
+			r.Get("/me/security", s.mySecurity)
+			r.Post("/me/security/recovery-codes", s.myNewRecoveryCodes)
 
 			r.Get("/attendance/today", s.attendanceToday)
 			r.Post("/attendance/check", s.attendanceCheck)
@@ -153,6 +169,8 @@ func (s *Server) Router() http.Handler {
 				r.Get("/admin/people", s.adminPeople)
 				r.Post("/admin/people", s.adminCreatePerson)
 				r.Patch("/admin/people/{id}", s.adminUpdatePerson)
+				r.Post("/admin/people/{id}/reset-mfa", s.adminResetMFA)
+				r.Post("/admin/people/{id}/make-owner", s.adminMakeOwner)
 				r.Post("/admin/teams", s.adminCreateTeam)
 				r.Patch("/admin/teams/{id}", s.adminRenameTeam)
 				r.Delete("/admin/teams/{id}", s.adminDeleteTeam)

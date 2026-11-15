@@ -1,6 +1,6 @@
 # HRMS
 
-The company HR app: attendance with location and network checks, WFH and other requests, weekly timesheets, private team task boards, chat with @mentions and notifications, and team views for managers, HR and admins.
+The company HR app: sign-in with an authenticator app for everyone, attendance with location and network checks, WFH and other requests, weekly timesheets, private team task boards, chat with @mentions and notifications, and team views for managers, HR and admins.
 
 Frames (design): https://claude.ai/artifact/852jUKSLz5XPTCVwP7yNT6
 
@@ -26,9 +26,11 @@ make web     # http://localhost:3100
 
 Or `make up` to run everything in Docker.
 
+Deploying to a server: see [DEPLOY.md](DEPLOY.md).
+
 ### Demo accounts
 
-All of them use `SEED_PASSWORD` from `.env`.
+All of them use `SEED_PASSWORD` from `.env`. Each one sets up an authenticator app at its first sign-in, like real accounts. Rahul is the Owner.
 
 | Email | Access |
 |---|---|
@@ -59,11 +61,25 @@ In development, the office network list includes this computer (`127.0.0.0/8`, `
 | Archive a channel; delete others' messages in it | | team managers | | |
 | Direct and group messages | anyone | anyone | anyone | anyone |
 | People, teams, managers, offices, networks, rules | | | | ✓ |
+| Reset someone's authenticator | | | | ✓ (not the Owner's) |
+| Change the Owner's account; hand over the Owner role | | | | Owner only |
 
 - A manager is someone ticked as "Manages this team" on Teams and people. Ticking it gives an employee the Manager role.
 - Nobody can decide their own request or timesheet.
 - Task boards follow team membership, not role: HR sees only the boards of teams HR people are in. Anyone may delete a task they created.
+- **The Owner** is one Admin (the first one) that other Admins cannot change: not their role, password, active status or authenticator. The Owner can hand the role to another Admin who has an authenticator, confirmed with a code. An Admin can't remove their own admin access.
 - Chat channels are stricter than boards: only the team's members can read them, Admin included. Direct messages are readable only by the people in them.
+
+## Sign-in
+
+1. **Password.** Correct email and password give a 10-minute pending session, not access.
+2. **Authenticator code.** A 6-digit code (TOTP, RFC 6238) from Google Authenticator, Microsoft Authenticator or similar. Each code works once. Only then does the pending session become a full one (with a new token).
+3. **First sign-in.** People without an authenticator scan a QR code, confirm a code and get 10 one-time recovery codes. Nobody can skip this.
+
+- **Lost phone:** sign in with a recovery code, or an Admin presses "Reset authenticator" on Teams and people. For the Owner, the server command `seed -reset-mfa -email …` (see DEPLOY.md).
+- **Sign-in security** (in the menu) shows how many recovery codes are left and makes new ones.
+- **Limits:** 10 code tries per person in 15 minutes, on top of the password limits.
+- **Secrets** are encrypted with `MFA_KEY` (AES-256-GCM). Development uses a fixed key; production must set its own.
 
 ## Attendance rules
 
@@ -128,11 +144,12 @@ backend/
   queries/               sqlc queries → internal/store
   internal/rules         check-in decisions, day totals (unit tested)
   internal/clientip      trusted-proxy IP parsing (unit tested)
+  internal/mfa           authenticator codes, recovery codes, secret encryption, QR (unit tested)
   internal/boards        status templates, team keys, task refs, labels (unit tested)
   internal/chattext      mentions, task keys in messages, channel names (unit tested)
   internal/live          WebSocket fan-out over Redis, online status (unit tested)
   internal/api           HTTP handlers
-web/app/(app)/           pages: dashboard, chat, attendance, requests, timesheets, tasks/*, team/*, approvals, admin/*
+web/app/(app)/           pages: dashboard, chat, attendance, requests, timesheets, tasks/*, team/*, approvals, security, admin/*
 infra/docker-compose.yml
 ```
 
@@ -142,6 +159,7 @@ infra/docker-compose.yml
 - The live socket only accepts pages from its own host. If the web app is served from another host, list it in `ALLOWED_ORIGINS` (for example `hr.example.com`).
 - Run more than one API instance only with Redis on: Redis carries live events between them.
 - Set `APP_ENV=production` for Secure cookies.
+- Set `MFA_KEY` (`openssl rand -hex 32`) and keep a copy. The API refuses to start in production without it.
 - Replace the example office IPs with your real static IPs.
 
 ## Next steps

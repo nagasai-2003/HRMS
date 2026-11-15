@@ -6,11 +6,11 @@ import { weekdays } from "@/lib/format";
 import { RoleGate, useMe } from "@/components/shell";
 import { Badge, Button, Card, cx, Empty, Field, inputCls, Notice, PageHeader, Table } from "@/components/ui";
 
-type Person = { id: string; email: string; name: string; title: string; role: string; work_policy: string; remote_weekdays: number[]; office_id: string | null; active: boolean };
+type Person = { id: string; email: string; name: string; title: string; role: string; work_policy: string; remote_weekdays: number[]; office_id: string | null; active: boolean; is_owner: boolean; mfa_on: boolean };
 type Team = { id: string; name: string; key: string; members: { user_id: string; is_manager: boolean }[] };
 type Data = { people: Person[]; teams: Team[]; offices: { id: string; name: string }[] };
 
-const blank: Person & { password: string } = { id: "", email: "", name: "", title: "", role: "employee", work_policy: "office", remote_weekdays: [], office_id: null, active: true, password: "" };
+const blank: Person & { password: string } = { id: "", email: "", name: "", title: "", role: "employee", work_policy: "office", remote_weekdays: [], office_id: null, active: true, is_owner: false, mfa_on: false, password: "" };
 const roleText: Record<string, string> = { employee: "Employee", manager: "Manager", hr: "HR", admin: "Admin" };
 
 export default function AdminPeoplePage() {
@@ -30,6 +30,7 @@ function Inner() {
   const [newKey, setNewKey] = useState("");
   const [teamEdit, setTeamEdit] = useState<{ name: string; key: string } | null>(null);
   const [addUser, setAddUser] = useState("");
+  const [ownerCode, setOwnerCode] = useState("");
   const [error, setError] = useState("");
   const [ok, setOk] = useState("");
 
@@ -72,6 +73,19 @@ function Inner() {
     if (done) setEdit(null);
   }
 
+  async function resetMFA(p: Person) {
+    if (!confirm(`Reset ${p.name}'s authenticator? They are signed out everywhere and set up the app again at their next sign-in. Their recovery codes stop working.`)) return;
+    if (await run(() => api(`/admin/people/${p.id}/reset-mfa`, { body: {} }), `${p.name}'s authenticator was reset. They set it up again at their next sign-in.`)) setEdit(null);
+  }
+
+  async function makeOwner(e: FormEvent, p: Person) {
+    e.preventDefault();
+    if (!confirm(`Make ${p.name} the Owner? You stay an Admin, but ${p.name} can then change your account and you cannot change theirs.`)) return;
+    if (await run(() => api(`/admin/people/${p.id}/make-owner`, { body: { code: ownerCode } }))) {
+      window.location.reload();
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -89,7 +103,7 @@ function Inner() {
             <Field label="Work email"><input className={inputCls} type="email" required disabled={!!edit.id} value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></Field>
             <Field label="Job title"><input className={inputCls} value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} /></Field>
             <Field label="App access" hint="Manager: sees and approves their own teams. HR: whole company, decides WFH. Admin: everything.">
-              <select className={inputCls} value={edit.role} disabled={edit.id === me.id} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>
+              <select className={inputCls} value={edit.role} disabled={edit.id === me.id || edit.is_owner} onChange={(e) => setEdit({ ...edit, role: e.target.value })}>
                 {Object.entries(roleText).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
             </Field>
@@ -136,6 +150,35 @@ function Inner() {
               <Button variant="ghost" onClick={() => setEdit(null)}>Cancel</Button>
             </div>
           </form>
+          {edit.id && edit.id !== me.id && (
+            <div className="mt-5 flex flex-col gap-4 border-t border-line pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-col gap-0.5 text-sm">
+                  <span className="font-semibold">Authenticator app</span>
+                  <span className="text-muted">{edit.mfa_on ? "Set up. Reset it if they lost or changed their phone." : "Not set up yet. They set it up at their next sign-in."}</span>
+                </div>
+                {edit.mfa_on && <Button variant="danger" size="sm" onClick={() => resetMFA(edit)}>Reset authenticator</Button>}
+              </div>
+              {me.is_owner && edit.role === "admin" && edit.active && (
+                <form onSubmit={(e) => makeOwner(e, edit)} className="flex flex-wrap items-end justify-between gap-3">
+                  <div className="flex max-w-md flex-col gap-0.5 text-sm">
+                    <span className="font-semibold">Hand over the Owner role</span>
+                    <span className="text-muted">
+                      {edit.mfa_on ? `${edit.name} becomes the Owner and you stay an Admin. Confirm with a code from your own app.` : `${edit.name} has to sign in once and set up the authenticator first.`}
+                    </span>
+                  </div>
+                  {edit.mfa_on && (
+                    <div className="flex items-end gap-2">
+                      <Field label="Your code">
+                        <input className={inputCls + " w-32 font-mono tracking-widest"} inputMode="numeric" autoComplete="one-time-code" required maxLength={7} placeholder="123456" value={ownerCode} onChange={(e) => setOwnerCode(e.target.value)} />
+                      </Field>
+                      <Button type="submit">Make Owner</Button>
+                    </div>
+                  )}
+                </form>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
@@ -217,10 +260,19 @@ function Inner() {
             <tr key={p.id} className={p.active ? "" : "opacity-60"}>
               <td><div className="flex flex-col"><span className="font-semibold">{p.name}</span><span className="text-xs text-muted">{p.title}</span></div></td>
               <td className="text-ink-2">{p.email}</td>
-              <td><Badge tone={p.role === "employee" ? "neutral" : "info"}>{roleText[p.role]}</Badge></td>
+              <td>{p.is_owner ? <Badge tone="violet">Owner</Badge> : <Badge tone={p.role === "employee" ? "neutral" : "info"}>{roleText[p.role]}</Badge>}</td>
               <td>{p.work_policy === "hybrid" ? `Hybrid · ${p.remote_weekdays.map((d) => weekdays[d - 1]).join(", ")}` : p.work_policy === "remote" ? "Remote" : "Office"}</td>
-              <td>{p.active ? <Badge tone="ok">Active</Badge> : <Badge>Deactivated</Badge>}</td>
-              <td className="text-right"><Button size="sm" variant="ghost" onClick={() => setEdit({ ...p, password: "" })}>Edit</Button></td>
+              <td>
+                <div className="flex flex-wrap gap-1.5">
+                  {p.active ? <Badge tone="ok">Active</Badge> : <Badge>Deactivated</Badge>}
+                  {p.active && !p.mfa_on && <Badge tone="warn">No authenticator yet</Badge>}
+                </div>
+              </td>
+              <td className="text-right">
+                {p.is_owner && !me.is_owner
+                  ? <span className="text-xs text-muted">Only the Owner edits this</span>
+                  : <Button size="sm" variant="ghost" onClick={() => { setEdit({ ...p, password: "" }); setOwnerCode(""); }}>Edit</Button>}
+              </td>
             </tr>
           ))}
         </Table>
